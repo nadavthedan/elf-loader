@@ -4,12 +4,14 @@
 #include "elfutils.h"
 
 int main() {
+  printf("Started program\n");
   int ret;
   elf_generic_header header;
 
-  ret = read_elf_header("./bins/program", &header);
+  FILE *fp = fopen("./bins/program", "rb");
+  ret = read_elf_header(fp, &header);
   if (ret != 0) {
-    printf("Failed reading elf header.");
+    printf("Failed reading elf header.\n");
     return -1;
   }
 
@@ -24,4 +26,6 @@ int main() {
     printf("machine: %#x\n", header.header.h32.e_machine);
     printf("version: %#x\n", header.header.h32.e_version);
   }
+
+  fclose(fp);
 }

@@ -10,16 +10,17 @@ typedef struct {
   } header;
 } elf_generic_header;
 
-int read_elf_header(char *filename, elf_generic_header *ret_header) {
-  FILE *fp = fopen(filename, "rb");
+int read_elf_header(FILE *fp, elf_generic_header *ret_header) {
   if (!fp) {
-    printf("Failed to open file %s\n", filename);
+    printf("ERROR: Received File Pointer is NULL\n");
     return -1;
   }
 
+  rewind(fp);
+
   unsigned char ident[EI_NIDENT];
   if (fread(ident, 1, EI_NIDENT, fp) != EI_NIDENT) {
-    printf("Failed to read file idnetifier\n");
+    printf("ERROR: Failed to read file idnetifier\n");
     fclose(fp);
     return -1;
   }
@@ -40,6 +41,13 @@ int read_elf_header(char *filename, elf_generic_header *ret_header) {
     fread(&ret_header->header.h64, sizeof(Elf64_Ehdr), 1, fp);
   }
 
-  fclose(fp);
+  return 0;
+}
+
+typedef struct {
+
+} elf_generic_program_header;
+
+int read_elf_program_header(FILE *fp, elf_generic_program_header *ret_header) {
   return 0;
 }
