@@ -13,6 +13,10 @@ typedef struct {
     Elf32_Phdr *h32;
     Elf64_Phdr *h64;
   } program_headers;
+  union {
+    Elf32_Shdr *h32;
+    Elf64_Shdr *h64;
+  } section_headers;
 } elf_generic_headers;
 
 int read_elf_header(FILE *fp, elf_generic_headers *elf) {
@@ -49,7 +53,7 @@ int read_elf_header(FILE *fp, elf_generic_headers *elf) {
   return 0;
 }
 
-int read_elf_program_header(FILE *fp, elf_generic_headers *elf) {
+int read_elf_program_headers(FILE *fp, elf_generic_headers *elf) {
   if (!fp) {
     printf("ERROR: Received File Pointer is NULL\n");
     return -1;
@@ -77,6 +81,42 @@ int read_elf_program_header(FILE *fp, elf_generic_headers *elf) {
     fseek(fp, elf->elf_header.h32.e_phoff, SEEK_SET);
     fread(elf->program_headers.h32, sizeof(Elf32_Phdr),
           elf->elf_header.h32.e_phnum, fp);
+  } else {
+    printf("ERROR: unknown elf bit class in the elf header\n");
+    return -1;
+  }
+
+  return 0;
+}
+
+int read_elf_section_headers(FILE *fp, elf_generic_headers *elf) {
+  if (!fp) {
+    printf("ERROR: Received File Pointer is NULL\n");
+    return -1;
+  }
+
+  if (elf->bit_class == ELFCLASS64) {
+    Elf64_Shdr *section_headers =
+        malloc(elf->elf_header.h64.e_shentsize * elf->elf_header.h64.e_shnum);
+    if (section_headers == NULL) {
+      printf("ERROR: failed to malloc space for section_headers\n");
+      return -1;
+    }
+    elf->section_headers.h64 = section_headers;
+    fseek(fp, elf->elf_header.h64.e_shoff, SEEK_SET);
+    fread(elf->section_headers.h64, sizeof(Elf64_Shdr),
+          elf->elf_header.h64.e_shnum, fp);
+  } else if (elf->bit_class == ELFCLASS32) {
+    Elf32_Shdr *section_headers =
+        malloc(elf->elf_header.h32.e_shentsize * elf->elf_header.h32.e_shnum);
+    if (section_headers == NULL) {
+      printf("ERROR: failed to malloc space for section_headers\n");
+      return -1;
+    }
+    elf->section_headers.h32 = section_headers;
+    fseek(fp, elf->elf_header.h32.e_shoff, SEEK_SET);
+    fread(elf->section_headers.h32, sizeof(Elf32_Shdr),
+          elf->elf_header.h32.e_shnum, fp);
   } else {
     printf("ERROR: unknown elf bit class in the elf header\n");
     return -1;

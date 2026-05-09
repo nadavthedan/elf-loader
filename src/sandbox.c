@@ -15,9 +15,15 @@ int main() {
     return -1;
   }
 
-  ret = read_elf_program_header(fp, &headers);
+  ret = read_elf_program_headers(fp, &headers);
   if (ret != 0) {
     printf("Failed reading elf program headers.\n");
+    return -1;
+  }
+
+  ret = read_elf_section_headers(fp, &headers);
+  if (ret != 0) {
+    printf("Failed reading elf section headers.\n");
     return -1;
   }
 
@@ -27,10 +33,21 @@ int main() {
     printf("machine: %#x\n", headers.elf_header.h64.e_machine);
     printf("version: %#x\n", headers.elf_header.h64.e_version);
     printf("====================\n");
+    printf("####################\n");
     for (int i = 0; i < headers.elf_header.h64.e_phnum; i++) {
       printf("Program header number %d\n", i);
       printf("Type - %#x\n", headers.program_headers.h64[i].p_type);
+      printf("Flags - %ud\n", headers.program_headers.h64[i].p_flags);
       printf("Offset - %ld\n", headers.program_headers.h64[i].p_offset);
+    }
+    printf("####################\n");
+    for (int i = 0; i < headers.elf_header.h64.e_shnum; i++) {
+      printf("Section header number %d\n", i);
+      printf("Type - %#x\n", headers.section_headers.h64[i].sh_type);
+      printf("Name - %#x\n", headers.section_headers.h64[i].sh_name);
+      printf("Info - %#x\n", headers.section_headers.h64[i].sh_info);
+      printf("flags - %lu\n", headers.section_headers.h64[i].sh_flags);
+      printf("Offset - %ld\n", headers.section_headers.h64[i].sh_offset);
     }
     printf("====================\n");
   } else if (headers.bit_class == ELFCLASS32) {
