@@ -9,11 +9,21 @@ typedef struct {
   union {
     Elf32_Ehdr h32;
     Elf64_Ehdr h64;
-  } header;
-} elf_generic_header;
+  } elf_header;
+  union {
+    Elf32_Phdr *h32;
+    Elf64_Phdr *h64;
+  } program_headers;
+} elf_generic_headers;
 
 // Reads elf header from a file to an elf_generic_header struct.
 // Gets a file pointer and a pointer to elf_generic_header which it populates.
 // It populates the bit_class, and the corresponding header type to the struct.
 // It returns 0 on success and -1 on error.
-int read_elf_header(FILE *fp, elf_generic_header *header);
+int read_elf_header(FILE *fp, elf_generic_headers *elf);
+
+// Reads the elf program headers from an elf file to an elf_generic_header
+// struct (that already has a bit_class and elf_header). Gets a file pointer and
+// a pointer to elf_generic_header which it populates. It mallocs and populates
+// the program headers to the struct. It returns 0 on success and -1 on error.
+int read_elf_program_header(FILE *fp, elf_generic_headers *elf);

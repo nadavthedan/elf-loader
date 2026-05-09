@@ -1,16 +1,21 @@
 #include <elf.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 typedef struct {
   uint8_t bit_class;
   union {
     Elf32_Ehdr h32;
     Elf64_Ehdr h64;
-  } header;
-} elf_generic_header;
+  } elf_header;
+  union {
+    Elf32_Phdr *h32;
+    Elf64_Phdr *h64;
+  } program_headers;
+} elf_generic_headers;
 
-int read_elf_header(FILE *fp, elf_generic_header *ret_header) {
+int read_elf_header(FILE *fp, elf_generic_headers *elf) {
   if (!fp) {
     printf("ERROR: Received File Pointer is NULL\n");
     return -1;
@@ -34,20 +39,48 @@ int read_elf_header(FILE *fp, elf_generic_header *ret_header) {
   rewind(fp);
 
   if (ident[EI_CLASS] == ELFCLASS32) {
-    ret_header->bit_class = ELFCLASS32;
-    fread(&ret_header->header.h32, sizeof(Elf32_Ehdr), 1, fp);
+    elf->bit_class = ELFCLASS32;
+    fread(&elf->elf_header.h32, sizeof(Elf32_Ehdr), 1, fp);
   } else if (ident[EI_CLASS] == ELFCLASS64) {
-    ret_header->bit_class = ELFCLASS64;
-    fread(&ret_header->header.h64, sizeof(Elf64_Ehdr), 1, fp);
+    elf->bit_class = ELFCLASS64;
+    fread(&elf->elf_header.h64, sizeof(Elf64_Ehdr), 1, fp);
   }
 
   return 0;
 }
 
-typedef struct {
+int read_elf_program_header(FILE *fp, elf_generic_headers *elf) {
+  if (!fp) {
+    printf("ERROR: Received File Pointer is NULL\n");
+    return -1;
+  }
 
-} elf_generic_program_header;
+  if (elf->bit_class == ELFCLASS64) {
+    Elf64_Phdr *program_headers =
+        malloc(elf->elf_header.h64.e_phentsize * elf->elf_header.h64.e_phnum);
+    if (program_headers == NULL) {
+      printf("ERROR: failed to malloc space for program_headers\n");
+      return -1;
+    }
+    elf->program_headers.h64 = program_headers;
+    fseek(fp, elf->elf_header.h64.e_phoff, SEEK_SET);
+    fread(elf->program_headers.h64, sizeof(Elf64_Phdr),
+          elf->elf_header.h64.e_phnum, fp);
+  } else if (elf->bit_class == ELFCLASS32) {
+    Elf32_Phdr *program_headers =
+        malloc(elf->elf_header.h32.e_phentsize * elf->elf_header.h32.e_phnum);
+    if (program_headers == NULL) {
+      printf("ERROR: failed to malloc space for program_headers\n");
+      return -1;
+    }
+    elf->program_headers.h32 = program_headers;
+    fseek(fp, elf->elf_header.h32.e_phoff, SEEK_SET);
+    fread(elf->program_headers.h32, sizeof(Elf32_Phdr),
+          elf->elf_header.h32.e_phnum, fp);
+  } else {
+    printf("ERROR: unknown elf bit class in the elf header\n");
+    return -1;
+  }
 
-int read_elf_program_header(FILE *fp, elf_generic_program_header *ret_header) {
   return 0;
 }
