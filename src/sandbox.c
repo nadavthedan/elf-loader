@@ -37,7 +37,7 @@ int main() {
     for (int i = 0; i < headers.elf_header.h64.e_phnum; i++) {
       printf("Program header number %d\n", i);
       printf("Type - %#x\n", headers.program_headers.h64[i].p_type);
-      printf("Flags - %ud\n", headers.program_headers.h64[i].p_flags);
+      printf("Flags - %#x\n", headers.program_headers.h64[i].p_flags);
       printf("Offset - %ld\n", headers.program_headers.h64[i].p_offset);
     }
     printf("####################\n");
@@ -46,7 +46,7 @@ int main() {
       printf("Type - %#x\n", headers.section_headers.h64[i].sh_type);
       printf("Name - %#x\n", headers.section_headers.h64[i].sh_name);
       printf("Info - %#x\n", headers.section_headers.h64[i].sh_info);
-      printf("flags - %lu\n", headers.section_headers.h64[i].sh_flags);
+      printf("Flags - %#lx\n", headers.section_headers.h64[i].sh_flags);
       printf("Offset - %ld\n", headers.section_headers.h64[i].sh_offset);
     }
     printf("====================\n");
