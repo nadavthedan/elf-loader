@@ -11,7 +11,9 @@
 #define ALIGN_DOWN(x, pagesize) ((x) & ~((pagesize) - 1))
 #define ALIGN_UP(x, pagesize) (((x) + ((pagesize) - 1)) & ~((pagesize) - 1))
 
-int load(FILE *fp, elf_generic_headers *elf) {
+// TODO: DRY. a lot of code branch to the same logic expect that the type is
+// different. ( use a common type or a macro)
+int reserveelfvm(FILE *fp, elf_generic_headers *elf) {
   int i;
   int page_size = getpagesize();
   if (elf->bit_class == ELFCLASS64) {

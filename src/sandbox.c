@@ -9,7 +9,7 @@ int main() {
   int ret;
   elf_generic_headers headers;
 
-  FILE *fp = fopen("./bins/program", "rb");
+  FILE *fp = fopen("./bins/hello", "rb");
   ret = read_elf_header(fp, &headers);
   if (ret != 0) {
     printf("Failed reading elf header.\n");
@@ -57,7 +57,7 @@ int main() {
     printf("machine: %#x\n", headers.elf_header.h32.e_machine);
     printf("version: %#x\n", headers.elf_header.h32.e_version);
   }
-  load(fp, &headers);
+  reserveelfvm(fp, &headers);
 
   fclose(fp);
 }
