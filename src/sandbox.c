@@ -1,6 +1,7 @@
 #include <elf.h>
 #include <stdio.h>
 
+#include "elfloader.h"
 #include "elfutils.h"
 
 int main() {
@@ -56,6 +57,7 @@ int main() {
     printf("machine: %#x\n", headers.elf_header.h32.e_machine);
     printf("version: %#x\n", headers.elf_header.h32.e_version);
   }
+  load(fp, &headers);
 
   fclose(fp);
 }

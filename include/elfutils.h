@@ -1,3 +1,6 @@
+#ifndef ELFUTILS_H
+#define ELFUTILS_H
+
 #include <elf.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -37,3 +40,5 @@ int read_elf_program_headers(FILE *fp, elf_generic_headers *elf);
 // a pointer to elf_generic_header which it populates. It mallocs and populates
 // the section headers to the struct. It returns 0 on success and -1 on error.
 int read_elf_section_headers(FILE *fp, elf_generic_headers *elf);
+
+#endif
