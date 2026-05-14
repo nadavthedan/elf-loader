@@ -1,4 +1,5 @@
 #include <elf.h>
+#include <stdint.h>
 #include <stdio.h>
 
 #include "elfloader.h"
@@ -57,7 +58,13 @@ int main() {
     printf("machine: %#x\n", headers.elf_header.h32.e_machine);
     printf("version: %#x\n", headers.elf_header.h32.e_version);
   }
-  reserveelfvm(fp, &headers);
+  ret = load_to_memory(fp, &headers);
+  if (ret != 0) {
+    printf("ERROR: failed reserveelfvm\n");
+    return 1;
+  }
+  uintptr_t entry = headers.elf_header.h64.e_entry;
 
+  setup_and_jump(entry, &headers);
   fclose(fp);
 }

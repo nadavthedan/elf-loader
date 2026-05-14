@@ -8,6 +8,9 @@
 
 // reserve virtual memory for the elf program LOAD data to memory.
 // returns 0 on success, 1 on error.
-int reserveelfvm(FILE *fp, elf_generic_headers *elf);
+int load_to_memory(FILE *fp, elf_generic_headers *elf);
 
+void execute_entry(uintptr_t entry, void *stack_ptr);
+
+void setup_and_jump(uintptr_t entry_point, elf_generic_headers *elf);
 #endif
