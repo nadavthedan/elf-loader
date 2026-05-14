@@ -30,15 +30,12 @@ int load_to_memory(FILE *fp, elf_generic_headers *elf) {
         off_t file_off = ALIGN_DOWN(phdr.p_offset, page_size);
 
         if (phdr.p_flags & PF_X) {
-          printf("EXEC THINGI\n");
           prots |= PROT_EXEC;
         }
         if (phdr.p_flags & PF_W)
           prots |= PROT_WRITE;
         if (phdr.p_flags & PF_R)
           prots |= PROT_READ;
-        printf("virtural mem: seg_start: %zu, seg_size: %zu, file_off: %jd\n",
-               seg_start, seg_size, file_off);
         void *mem = mmap((void *)seg_start, seg_size, prots,
                          MAP_FIXED | MAP_PRIVATE, fileno(fp), file_off);
         if (mem == MAP_FAILED) {
@@ -51,8 +48,6 @@ int load_to_memory(FILE *fp, elf_generic_headers *elf) {
           memset(mem + phdr.p_filesz + data_offset, 0,
                  phdr.p_memsz - phdr.p_filesz);
         }
-
-        printf("mem: %p\n", mem);
       }
     }
   } else if (elf->bit_class == ELFCLASS32) {
@@ -74,8 +69,6 @@ int load_to_memory(FILE *fp, elf_generic_headers *elf) {
         if (phdr.p_flags & PF_R)
           prots |= PROT_READ;
 
-        printf("virtural mem: seg_start: %zu, seg_size: %zu, file_off: %jd\n",
-               seg_start, seg_size, file_off);
         void *mem = mmap((void *)seg_start, seg_size, prots,
                          MAP_FIXED | MAP_PRIVATE, fileno(fp), file_off);
         if (mem == MAP_FAILED) {
@@ -88,8 +81,6 @@ int load_to_memory(FILE *fp, elf_generic_headers *elf) {
           memset(mem + phdr.p_filesz + data_offset, 0,
                  phdr.p_memsz - phdr.p_filesz);
         }
-
-        printf("mem: %p\n", mem);
       }
     }
   } else {
@@ -110,7 +101,6 @@ void execute_entry(uintptr_t entry, void *stack_ptr) {
 }
 
 void setup_and_jump(uintptr_t entry_point, elf_generic_headers *elf) {
-  printf("SETUP AND JUMP\n");
   int page_size = getpagesize();
 
   void *stack_low = mmap(NULL, STACK_SIZE, PROT_READ | PROT_WRITE,
@@ -142,9 +132,12 @@ void setup_and_jump(uintptr_t entry_point, elf_generic_headers *elf) {
     phnum = elf->elf_header.h64.e_phnum;
     for (int i = 0; i < phnum; i++) {
       if (elf->program_headers.h64[i].p_type == PT_LOAD) {
-        uintptr_t seg_start = ALIGN_DOWN(elf->program_headers.h64[i].p_vaddr, page_size);
-        off_t file_off = ALIGN_DOWN(elf->program_headers.h64[i].p_offset, page_size);
-        phdr_addr = seg_start + (elf->elf_header.h64.e_phoff - (uint64_t)file_off);
+        uintptr_t seg_start =
+            ALIGN_DOWN(elf->program_headers.h64[i].p_vaddr, page_size);
+        off_t file_off =
+            ALIGN_DOWN(elf->program_headers.h64[i].p_offset, page_size);
+        phdr_addr =
+            seg_start + (elf->elf_header.h64.e_phoff - (uint64_t)file_off);
         break;
       }
     }
@@ -152,9 +145,12 @@ void setup_and_jump(uintptr_t entry_point, elf_generic_headers *elf) {
     phnum = elf->elf_header.h32.e_phnum;
     for (int i = 0; i < phnum; i++) {
       if (elf->program_headers.h32[i].p_type == PT_LOAD) {
-        uintptr_t seg_start = ALIGN_DOWN(elf->program_headers.h32[i].p_vaddr, page_size);
-        off_t file_off = ALIGN_DOWN(elf->program_headers.h32[i].p_offset, page_size);
-        phdr_addr = seg_start + (elf->elf_header.h32.e_phoff - (uint64_t)file_off);
+        uintptr_t seg_start =
+            ALIGN_DOWN(elf->program_headers.h32[i].p_vaddr, page_size);
+        off_t file_off =
+            ALIGN_DOWN(elf->program_headers.h32[i].p_offset, page_size);
+        phdr_addr =
+            seg_start + (elf->elf_header.h32.e_phoff - (uint64_t)file_off);
         break;
       }
     }
@@ -186,7 +182,7 @@ void setup_and_jump(uintptr_t entry_point, elf_generic_headers *elf) {
 
   // argv (NULL terminated)
   *(--stack_ptr) = 0;
-  char *arg0 = "./hello";
+  char *arg0 = "./mergesort";
   *(--stack_ptr) = (uintptr_t)arg0;
 
   // argc
