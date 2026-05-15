@@ -8,8 +8,9 @@
 
 // reserve virtual memory for the elf program LOAD data to memory.
 // returns 0 on success, 1 on error.
-int load_to_memory(FILE *fp, Elf64_Headers *elf);
+int elf_static_load_to_memory(FILE *fp, Elf64_Headers *elf);
 
 // allocates stack, sets up initial register state jumps to entry point.
-void setup_and_jump(uintptr_t entry_point, Elf64_Headers *elf);
+void setup_and_jump(uintptr_t entry_point, Elf64_Headers *elf, int argc,
+                    char *argv[]);
 #endif

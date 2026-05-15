@@ -12,7 +12,7 @@
 #define ALIGN_UP(x, pagesize) (((x) + ((pagesize) - 1)) & ~((pagesize) - 1))
 #define STACK_SIZE (1024 * 1024) // 1MB stack
 
-int load_to_memory(FILE *fp, Elf64_Headers *elf) {
+int elf_static_load_to_memory(FILE *fp, Elf64_Headers *elf) {
   int i;
   int page_size = getpagesize();
   for (i = 0; i < elf->elf_header.e_phnum; i++) {
@@ -60,7 +60,8 @@ void execute_entry(uintptr_t entry, void *stack_ptr) {
       : "memory");
 }
 
-void setup_and_jump(uintptr_t entry_point, Elf64_Headers *elf) {
+void setup_and_jump(uintptr_t entry_point, Elf64_Headers *elf, int argc,
+                    char *argv[]) {
   int page_size = getpagesize();
 
   void *stack_low = mmap(NULL, STACK_SIZE, PROT_READ | PROT_WRITE,
@@ -127,11 +128,12 @@ void setup_and_jump(uintptr_t entry_point, Elf64_Headers *elf) {
 
   // argv (NULL terminated)
   *(--stack_ptr) = 0;
-  char *arg0 = "./mergesort";
-  *(--stack_ptr) = (uintptr_t)arg0;
+  for (int i = argc - 1; i >= 0; i--) {
+    *(--stack_ptr) = (uintptr_t)argv[i];
+  }
 
   // argc
-  *(--stack_ptr) = 1;
+  *(--stack_ptr) = argc;
 
   execute_entry(entry_point, stack_ptr);
 }

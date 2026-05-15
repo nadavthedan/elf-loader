@@ -1,29 +1,44 @@
+#include "elfloader.h"
+#include "elfutils.h"
 #include <elf.h>
 #include <stdint.h>
 #include <stdio.h>
 
-#include "elfloader.h"
-#include "elfutils.h"
+char **main_args_parse(int argc, char *argv[]) {
+  if (argc < 2) {
+    return NULL;
+    printf("ERROR: Program did not receive enough arguments\n");
+  }
+  return argv + 1;
+}
 
-int main() {
+int main(int argc, char *argv[]) {
   printf("Started program\n");
   int ret;
+  int elf_argc;
+  char **elf_argv;
   Elf64_Headers headers;
 
-  FILE *fp = fopen("./bins/mergesort", "rb");
+  if ((elf_argv = main_args_parse(argc, argv)) == NULL) {
+    printf("ERROF: Program received invalid arguments.\n");
+    return -1;
+  }
+  elf_argc = argc - 1;
+
+  FILE *fp = fopen(elf_argv[0], "rb");
   ret = elf_headers_read(fp, &headers);
   if (ret != 0) {
-    printf("Failed reading elf header.\n");
+    printf("ERROR: Failed reading elf header.\n");
     return -1;
   }
 
-  ret = load_to_memory(fp, &headers);
+  ret = elf_static_load_to_memory(fp, &headers);
   if (ret != 0) {
-    printf("ERROR: failed reserveelfvm\n");
+    printf("ERROR: failed elf static load to memory\n");
     return 1;
   }
   uintptr_t entry = headers.elf_header.e_entry;
 
-  setup_and_jump(entry, &headers);
+  setup_and_jump(entry, &headers, elf_argc, elf_argv);
   fclose(fp);
 }
