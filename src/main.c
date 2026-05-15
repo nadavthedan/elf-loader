@@ -8,7 +8,7 @@
 int main() {
   printf("Started program\n");
   int ret;
-  elf_generic_headers headers;
+  Elf64_Headers headers;
 
   FILE *fp = fopen("./bins/mergesort", "rb");
   ret = read_elf_header(fp, &headers);
@@ -34,7 +34,7 @@ int main() {
     printf("ERROR: failed reserveelfvm\n");
     return 1;
   }
-  uintptr_t entry = headers.elf_header.h64.e_entry;
+  uintptr_t entry = headers.elf_header.e_entry;
 
   setup_and_jump(entry, &headers);
   fclose(fp);

@@ -12,80 +12,40 @@
 #define ALIGN_UP(x, pagesize) (((x) + ((pagesize) - 1)) & ~((pagesize) - 1))
 #define STACK_SIZE (1024 * 1024) // 1MB stack
 
-// TODO: DRY. a lot of code branch to the same logic expect that the type is
-// different. ( use a common type or a macro)
-int load_to_memory(FILE *fp, elf_generic_headers *elf) {
+int load_to_memory(FILE *fp, Elf64_Headers *elf) {
   int i;
   int page_size = getpagesize();
-  if (elf->bit_class == ELFCLASS64) {
-    for (i = 0; i < elf->elf_header.h64.e_phnum; i++) {
-      Elf64_Phdr phdr = elf->program_headers.h64[i];
-      uint32_t prots = PROT_NONE;
-      if (phdr.p_type == PT_LOAD) {
-        uintptr_t seg_start = ALIGN_DOWN(phdr.p_vaddr, page_size);
-        uintptr_t seg_end = ALIGN_UP(phdr.p_vaddr + phdr.p_memsz, page_size);
+  for (i = 0; i < elf->elf_header.e_phnum; i++) {
+    Elf64_Phdr phdr = elf->program_headers[i];
+    uint32_t prots = PROT_NONE;
+    if (phdr.p_type == PT_LOAD) {
+      uintptr_t seg_start = ALIGN_DOWN(phdr.p_vaddr, page_size);
+      uintptr_t seg_end = ALIGN_UP(phdr.p_vaddr + phdr.p_memsz, page_size);
 
-        size_t seg_size = seg_end - seg_start;
+      size_t seg_size = seg_end - seg_start;
 
-        off_t file_off = ALIGN_DOWN(phdr.p_offset, page_size);
+      off_t file_off = ALIGN_DOWN(phdr.p_offset, page_size);
 
-        if (phdr.p_flags & PF_X) {
-          prots |= PROT_EXEC;
-        }
-        if (phdr.p_flags & PF_W)
-          prots |= PROT_WRITE;
-        if (phdr.p_flags & PF_R)
-          prots |= PROT_READ;
-        void *mem = mmap((void *)seg_start, seg_size, prots,
-                         MAP_FIXED | MAP_PRIVATE, fileno(fp), file_off);
-        if (mem == MAP_FAILED) {
-          printf("ERROR: Failed mmap.\n");
-          return 1;
-        }
+      if (phdr.p_flags & PF_X) {
+        prots |= PROT_EXEC;
+      }
+      if (phdr.p_flags & PF_W)
+        prots |= PROT_WRITE;
+      if (phdr.p_flags & PF_R)
+        prots |= PROT_READ;
+      void *mem = mmap((void *)seg_start, seg_size, prots,
+                       MAP_FIXED | MAP_PRIVATE, fileno(fp), file_off);
+      if (mem == MAP_FAILED) {
+        printf("ERROR: Failed mmap.\n");
+        return 1;
+      }
 
-        uintptr_t data_offset = phdr.p_vaddr - seg_start;
-        if (phdr.p_filesz < phdr.p_memsz) {
-          memset(mem + phdr.p_filesz + data_offset, 0,
-                 phdr.p_memsz - phdr.p_filesz);
-        }
+      uintptr_t data_offset = phdr.p_vaddr - seg_start;
+      if (phdr.p_filesz < phdr.p_memsz) {
+        memset(mem + phdr.p_filesz + data_offset, 0,
+               phdr.p_memsz - phdr.p_filesz);
       }
     }
-  } else if (elf->bit_class == ELFCLASS32) {
-    for (i = 0; i < elf->elf_header.h32.e_phnum; i++) {
-      Elf32_Phdr phdr = elf->program_headers.h32[i];
-      uint32_t prots = PROT_NONE;
-      if (phdr.p_type == PT_LOAD) {
-        uintptr_t seg_start = ALIGN_DOWN(phdr.p_vaddr, page_size);
-        uintptr_t seg_end = ALIGN_UP(phdr.p_vaddr + phdr.p_memsz, page_size);
-
-        size_t seg_size = seg_end - seg_start;
-
-        off_t file_off = ALIGN_DOWN(phdr.p_offset, page_size);
-
-        if (phdr.p_flags & PF_X)
-          prots |= PROT_EXEC;
-        if (phdr.p_flags & PF_W)
-          prots |= PROT_WRITE;
-        if (phdr.p_flags & PF_R)
-          prots |= PROT_READ;
-
-        void *mem = mmap((void *)seg_start, seg_size, prots,
-                         MAP_FIXED | MAP_PRIVATE, fileno(fp), file_off);
-        if (mem == MAP_FAILED) {
-          printf("ERROR: Failed mmap.\n");
-          return 1;
-        }
-
-        uintptr_t data_offset = phdr.p_vaddr - seg_start;
-        if (phdr.p_filesz < phdr.p_memsz) {
-          memset(mem + phdr.p_filesz + data_offset, 0,
-                 phdr.p_memsz - phdr.p_filesz);
-        }
-      }
-    }
-  } else {
-    printf("ERROR: unknown bit_class: %d", elf->bit_class);
-    return 1;
   }
   return 0;
 }
@@ -100,7 +60,7 @@ void execute_entry(uintptr_t entry, void *stack_ptr) {
       : "memory");
 }
 
-void setup_and_jump(uintptr_t entry_point, elf_generic_headers *elf) {
+void setup_and_jump(uintptr_t entry_point, Elf64_Headers *elf) {
   int page_size = getpagesize();
 
   void *stack_low = mmap(NULL, STACK_SIZE, PROT_READ | PROT_WRITE,
@@ -110,7 +70,9 @@ void setup_and_jump(uintptr_t entry_point, elf_generic_headers *elf) {
     _exit(1);
   }
 
-  // 2. Point to the "top" of the stack (it grows down) TODO: WHY??
+  // 2. Point to the "top" of the stack (it grows down).
+  // stack is from stack_low to stack_low + STACK_SIZE - 1, so the top is
+  // stack_low + STACK_SIZE.
   uint64_t *stack_ptr = (uint64_t *)((uintptr_t)stack_low + STACK_SIZE);
 
   // 16 random bytes for AT_RANDOM (stack canary seed)
@@ -128,31 +90,14 @@ void setup_and_jump(uintptr_t entry_point, elf_generic_headers *elf) {
   // Calculate program headers virtual address in the loaded image
   uintptr_t phdr_addr = 0;
   uint16_t phnum = 0;
-  if (elf->bit_class == ELFCLASS64) {
-    phnum = elf->elf_header.h64.e_phnum;
-    for (int i = 0; i < phnum; i++) {
-      if (elf->program_headers.h64[i].p_type == PT_LOAD) {
-        uintptr_t seg_start =
-            ALIGN_DOWN(elf->program_headers.h64[i].p_vaddr, page_size);
-        off_t file_off =
-            ALIGN_DOWN(elf->program_headers.h64[i].p_offset, page_size);
-        phdr_addr =
-            seg_start + (elf->elf_header.h64.e_phoff - (uint64_t)file_off);
-        break;
-      }
-    }
-  } else if (elf->bit_class == ELFCLASS32) {
-    phnum = elf->elf_header.h32.e_phnum;
-    for (int i = 0; i < phnum; i++) {
-      if (elf->program_headers.h32[i].p_type == PT_LOAD) {
-        uintptr_t seg_start =
-            ALIGN_DOWN(elf->program_headers.h32[i].p_vaddr, page_size);
-        off_t file_off =
-            ALIGN_DOWN(elf->program_headers.h32[i].p_offset, page_size);
-        phdr_addr =
-            seg_start + (elf->elf_header.h32.e_phoff - (uint64_t)file_off);
-        break;
-      }
+  phnum = elf->elf_header.e_phnum;
+  for (int i = 0; i < phnum; i++) {
+    if (elf->program_headers[i].p_type == PT_LOAD) {
+      uintptr_t seg_start =
+          ALIGN_DOWN(elf->program_headers[i].p_vaddr, page_size);
+      off_t file_off = ALIGN_DOWN(elf->program_headers[i].p_offset, page_size);
+      phdr_addr = seg_start + (elf->elf_header.e_phoff - (uint64_t)file_off);
+      break;
     }
   }
 
