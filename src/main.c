@@ -11,21 +11,9 @@ int main() {
   Elf64_Headers headers;
 
   FILE *fp = fopen("./bins/mergesort", "rb");
-  ret = read_elf_header(fp, &headers);
+  ret = elf_headers_read(fp, &headers);
   if (ret != 0) {
     printf("Failed reading elf header.\n");
-    return -1;
-  }
-
-  ret = read_elf_program_headers(fp, &headers);
-  if (ret != 0) {
-    printf("Failed reading elf program headers.\n");
-    return -1;
-  }
-
-  ret = read_elf_section_headers(fp, &headers);
-  if (ret != 0) {
-    printf("Failed reading elf section headers.\n");
     return -1;
   }
 
