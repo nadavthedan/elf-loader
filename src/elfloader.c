@@ -12,7 +12,7 @@
 #define ALIGN_UP(x, pagesize) (((x) + ((pagesize) - 1)) & ~((pagesize) - 1))
 #define STACK_SIZE (1024 * 1024) // 1MB stack
 
-int elf_static_load_to_memory(FILE *fp, Elf64_Headers *elf) {
+int elf_static_load_to_memory(FILE *fp, Elf64_Data *elf) {
   int i;
   int page_size = getpagesize();
   for (i = 0; i < elf->elf_header.e_phnum; i++) {
@@ -60,7 +60,7 @@ void execute_entry(uintptr_t entry, void *stack_ptr) {
       : "memory");
 }
 
-void setup_and_jump(uintptr_t entry_point, Elf64_Headers *elf, int argc,
+void setup_and_jump(uintptr_t entry_point, Elf64_Data *elf, int argc,
                     char *argv[]) {
   int page_size = getpagesize();
 

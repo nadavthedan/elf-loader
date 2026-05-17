@@ -17,10 +17,10 @@ int main(int argc, char *argv[]) {
   int ret;
   int elf_argc;
   char **elf_argv;
-  Elf64_Headers headers;
+  Elf64_Data headers;
 
   if ((elf_argv = main_args_parse(argc, argv)) == NULL) {
-    printf("ERROF: Program received invalid arguments.\n");
+    printf("ERROR: Program received invalid arguments.\n");
     return -1;
   }
   elf_argc = argc - 1;
