@@ -1,6 +1,7 @@
 #include "elfutils.h"
 #include <elf.h>
 #include <endian.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -87,13 +88,8 @@ int elf_headers_read(FILE *fp, Elf64_Data *elf) {
     shdr = elf->section_headers[i];
     switch (shdr.sh_type) {
     case SHT_DYNAMIC:
-      elf->dynamics = malloc(shdr.sh_size);
       elf->dynamics_len = shdr.sh_size / sizeof(Elf64_Dyn);
-      if (elf->dynamics == NULL) {
-        printf("ERROR: failed to malloc space for dynamics\n");
-      }
-      fseek(fp, shdr.sh_offset, SEEK_SET);
-      fread(elf->dynamics, sizeof(Elf64_Dyn), elf->dynamics_len, fp);
+      read_section((void **)&elf->dynamics, sizeof(Elf64_Dyn), shdr, fp);
       break;
     case SHT_SYMTAB:
       ret = populate_str_table(elf, &elf->string_table, shdr.sh_link, fp);
@@ -101,13 +97,8 @@ int elf_headers_read(FILE *fp, Elf64_Data *elf) {
         printf("ERROR: falied to populate str table\n");
         return -1;
       }
-      elf->symbols = malloc(shdr.sh_size);
       elf->symbols_len = shdr.sh_size / sizeof(Elf64_Sym);
-      if (elf->symbols == NULL) {
-        printf("ERROR: failed to malloc space for symbol table\n");
-      }
-      fseek(fp, shdr.sh_offset, SEEK_SET);
-      fread(elf->symbols, sizeof(Elf64_Sym), elf->symbols_len, fp);
+      read_section((void **)&elf->symbols, sizeof(Elf64_Sym), shdr, fp);
       break;
     case SHT_DYNSYM:
       ret = populate_str_table(elf, &elf->string_dyn_table, shdr.sh_link, fp);
@@ -115,31 +106,16 @@ int elf_headers_read(FILE *fp, Elf64_Data *elf) {
         printf("ERROR: falied to populate str table\n");
         return -1;
       }
-      elf->symbols_dyn = malloc(shdr.sh_size);
       elf->symbols_dyn_len = shdr.sh_size / sizeof(Elf64_Sym);
-      if (elf->symbols_dyn == NULL) {
-        printf("ERROR: failed to malloc space for symbol table\n");
-      }
-      fseek(fp, shdr.sh_offset, SEEK_SET);
-      fread(elf->symbols_dyn, sizeof(Elf64_Sym), elf->symbols_dyn_len, fp);
+      read_section((void **)&elf->symbols_dyn, sizeof(Elf64_Sym), shdr, fp);
       break;
     case SHT_REL:
-      elf->rels = malloc(shdr.sh_size);
-      if (elf->rels == NULL) {
-        printf("ERROR: failed to malloc space for rels\n");
-      }
       elf->rels_len = shdr.sh_size / sizeof(Elf64_Rel);
-      fseek(fp, shdr.sh_offset, SEEK_SET);
-      fread(elf->rels, sizeof(Elf64_Rel), elf->rels_len, fp);
+      read_section((void **)&elf->rels, sizeof(Elf64_Rel), shdr, fp);
       break;
     case SHT_RELA:
-      elf->relas = malloc(shdr.sh_size);
-      if (elf->relas == NULL) {
-        printf("ERROR: failed to malloc space for relas\n");
-      }
       elf->relas_len = shdr.sh_size / sizeof(Elf64_Rela);
-      fseek(fp, shdr.sh_offset, SEEK_SET);
-      fread(elf->relas, sizeof(Elf64_Rela), elf->relas_len, fp);
+      read_section((void **)&elf->relas, sizeof(Elf64_Rela), shdr, fp);
       break;
     }
   }
@@ -159,5 +135,17 @@ int populate_str_table(Elf64_Data *elf, char **str_table, uint shidx,
   fseek(fp, shdr.sh_offset, SEEK_SET);
   fread(*str_table, sizeof(char), shdr.sh_size, fp);
 
+  return 0;
+}
+
+int read_section(void **section, size_t size, Elf64_Shdr shdr, FILE *fp) {
+  section = malloc(shdr.sh_size);
+  uint16_t len = shdr.sh_size / size;
+  if (section == NULL) {
+    printf("ERROR: failed to malloc space\n");
+    return 1;
+  }
+  fseek(fp, shdr.sh_offset, SEEK_SET);
+  fread(section, size, len, fp);
   return 0;
 }
