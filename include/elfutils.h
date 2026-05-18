@@ -12,19 +12,6 @@ typedef struct {
   Elf64_Ehdr elf_header;
   Elf64_Phdr *program_headers;
   Elf64_Shdr *section_headers;
-  Elf64_Dyn *dynamics;
-  uint dynamics_len;
-  Elf64_Sym *symbols;
-  uint symbols_len;
-  Elf64_Sym *symbols_dyn;
-  uint symbols_dyn_len;
-  Elf64_Rel *rels;
-  uint rels_len;
-  Elf64_Rel *relas;
-  uint relas_len;
-  char *string_section_headers_table;
-  char *string_table;
-  char *string_dyn_table;
 } Elf64_Data;
 
 // Reads elf header from a file to the Elf64_Headers type.

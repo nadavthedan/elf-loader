@@ -37,8 +37,6 @@ int elf_header_validate(FILE *fp) {
 
 int elf_headers_read(FILE *fp, Elf64_Data *elf) {
   int ret;
-  ulong i;
-  Elf64_Shdr shdr;
   if (!fp) {
     printf("ERROR: Received File Pointer is NULL\n");
     return -1;
@@ -73,79 +71,5 @@ int elf_headers_read(FILE *fp, Elf64_Data *elf) {
   }
   fseek(fp, elf->elf_header.e_shoff, SEEK_SET);
   fread(elf->section_headers, sizeof(Elf64_Shdr), elf->elf_header.e_shnum, fp);
-
-  if (elf->elf_header.e_shstrndx != SHN_UNDEF) {
-    // Read String Section Headers Table
-    ret = populate_str_table(elf, &elf->string_section_headers_table,
-                             elf->elf_header.e_shstrndx, fp);
-    if (ret != 0) {
-      printf("ERROR: falied to populate str section headers table\n");
-      return -1;
-    }
-  }
-
-  for (i = 0; i < elf->elf_header.e_shnum; i++) {
-    shdr = elf->section_headers[i];
-    switch (shdr.sh_type) {
-    case SHT_DYNAMIC:
-      elf->dynamics_len = shdr.sh_size / sizeof(Elf64_Dyn);
-      read_section((void **)&elf->dynamics, sizeof(Elf64_Dyn), shdr, fp);
-      break;
-    case SHT_SYMTAB:
-      ret = populate_str_table(elf, &elf->string_table, shdr.sh_link, fp);
-      if (ret != 0) {
-        printf("ERROR: falied to populate str table\n");
-        return -1;
-      }
-      elf->symbols_len = shdr.sh_size / sizeof(Elf64_Sym);
-      read_section((void **)&elf->symbols, sizeof(Elf64_Sym), shdr, fp);
-      break;
-    case SHT_DYNSYM:
-      ret = populate_str_table(elf, &elf->string_dyn_table, shdr.sh_link, fp);
-      if (ret != 0) {
-        printf("ERROR: falied to populate str table\n");
-        return -1;
-      }
-      elf->symbols_dyn_len = shdr.sh_size / sizeof(Elf64_Sym);
-      read_section((void **)&elf->symbols_dyn, sizeof(Elf64_Sym), shdr, fp);
-      break;
-    case SHT_REL:
-      elf->rels_len = shdr.sh_size / sizeof(Elf64_Rel);
-      read_section((void **)&elf->rels, sizeof(Elf64_Rel), shdr, fp);
-      break;
-    case SHT_RELA:
-      elf->relas_len = shdr.sh_size / sizeof(Elf64_Rela);
-      read_section((void **)&elf->relas, sizeof(Elf64_Rela), shdr, fp);
-      break;
-    }
-  }
-
-  return 0;
-}
-
-int populate_str_table(Elf64_Data *elf, char **str_table, uint shidx,
-                       FILE *fp) {
-  Elf64_Shdr shdr;
-  shdr = elf->section_headers[shidx];
-  *str_table = malloc(shdr.sh_size);
-  if (*str_table == NULL) {
-    printf("ERROR: failed to malloc str_table\n");
-    return -1;
-  }
-  fseek(fp, shdr.sh_offset, SEEK_SET);
-  fread(*str_table, sizeof(char), shdr.sh_size, fp);
-
-  return 0;
-}
-
-int read_section(void **section, size_t size, Elf64_Shdr shdr, FILE *fp) {
-  section = malloc(shdr.sh_size);
-  uint16_t len = shdr.sh_size / size;
-  if (section == NULL) {
-    printf("ERROR: failed to malloc space\n");
-    return 1;
-  }
-  fseek(fp, shdr.sh_offset, SEEK_SET);
-  fread(section, size, len, fp);
   return 0;
 }

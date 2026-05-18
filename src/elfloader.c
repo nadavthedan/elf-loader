@@ -12,17 +12,70 @@
 #define ALIGN_UP(x, pagesize) (((x) + ((pagesize) - 1)) & ~((pagesize) - 1))
 #define STACK_SIZE (1024 * 1024) // 1MB stack
 
-int elf_static_load_to_memory(FILE *fp, Elf64_Data *elf) {
+typedef struct {
+  uintptr_t min_vaddr;
+  uintptr_t max_vaddr;
+} ElfLoadVaddrBounds;
+
+int elf_calculate_total_vaddr(Elf64_Data *elf, ElfLoadVaddrBounds *bounds) {
+  uint16_t i;
+  uintptr_t min_vaddr = -1;
+  uintptr_t max_vaddr = 0;
+  Elf64_Phdr phdr;
+  if (elf->elf_header.e_phnum <= 0)
+    return 1;
+  for (i = 0; i < elf->elf_header.e_phnum; i++) {
+    phdr = elf->program_headers[i];
+    if (phdr.p_type != PT_LOAD)
+      continue;
+
+    min_vaddr = phdr.p_vaddr < min_vaddr ? phdr.p_vaddr : min_vaddr;
+    max_vaddr = (phdr.p_vaddr + phdr.p_memsz) > max_vaddr
+                    ? (phdr.p_vaddr + phdr.p_memsz)
+                    : max_vaddr;
+  }
+  bounds->max_vaddr = max_vaddr;
+  bounds->min_vaddr = min_vaddr;
+
+  return 0;
+}
+
+void *elf_reserve_memory(Elf64_Data *elf, ElfLoadVaddrBounds *bounds) {
+  int ret;
+  int page_size = getpagesize();
+  ret = elf_calculate_total_vaddr(elf, bounds);
+  if (ret != 0) {
+    printf("ERROR: Failed calculating bounds");
+  }
+  uint total_size = ALIGN_UP(bounds->max_vaddr - bounds->min_vaddr, page_size);
+  void *mapping;
+  switch (elf->elf_header.e_type) {
+  case ET_EXEC:
+    mapping = mmap((void *)bounds->min_vaddr, total_size, PROT_NONE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    break;
+  default:
+    mapping =
+        mmap(NULL, total_size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  }
+
+  return mapping;
+}
+
+uintptr_t elf_static_load_to_memory(FILE *fp, Elf64_Data *elf) {
   int i;
   int page_size = getpagesize();
+  ElfLoadVaddrBounds bounds;
+  void *res = elf_reserve_memory(elf, &bounds);
+  uintptr_t base = (uintptr_t)res - bounds.min_vaddr;
   for (i = 0; i < elf->elf_header.e_phnum; i++) {
     Elf64_Phdr phdr = elf->program_headers[i];
     uint32_t prots = PROT_NONE;
     if (phdr.p_type == PT_LOAD) {
       uintptr_t seg_start = ALIGN_DOWN(phdr.p_vaddr, page_size);
-      uintptr_t seg_end = ALIGN_UP(phdr.p_vaddr + phdr.p_memsz, page_size);
 
-      size_t seg_size = seg_end - seg_start;
+      uintptr_t page_offset = phdr.p_vaddr - seg_start;
+      size_t map_size = ALIGN_UP(page_offset + phdr.p_memsz, page_size);
 
       off_t file_off = ALIGN_DOWN(phdr.p_offset, page_size);
 
@@ -33,11 +86,11 @@ int elf_static_load_to_memory(FILE *fp, Elf64_Data *elf) {
         prots |= PROT_WRITE;
       if (phdr.p_flags & PF_R)
         prots |= PROT_READ;
-      void *mem = mmap((void *)seg_start, seg_size, prots,
+      void *mem = mmap((void *)(base + seg_start), map_size, prots,
                        MAP_FIXED | MAP_PRIVATE, fileno(fp), file_off);
       if (mem == MAP_FAILED) {
         printf("ERROR: Failed mmap.\n");
-        return 1;
+        return -1;
       }
 
       uintptr_t data_offset = phdr.p_vaddr - seg_start;
@@ -47,7 +100,7 @@ int elf_static_load_to_memory(FILE *fp, Elf64_Data *elf) {
       }
     }
   }
-  return 0;
+  return base;
 }
 
 void execute_entry(uintptr_t entry, void *stack_ptr) {
@@ -60,8 +113,8 @@ void execute_entry(uintptr_t entry, void *stack_ptr) {
       : "memory");
 }
 
-void setup_and_jump(uintptr_t entry_point, Elf64_Data *elf, int argc,
-                    char *argv[]) {
+void setup_and_jump(uintptr_t entry_point, uintptr_t base, Elf64_Data *elf,
+                    int argc, char *argv[]) {
   int page_size = getpagesize();
 
   void *stack_low = mmap(NULL, STACK_SIZE, PROT_READ | PROT_WRITE,
@@ -71,10 +124,37 @@ void setup_and_jump(uintptr_t entry_point, Elf64_Data *elf, int argc,
     _exit(1);
   }
 
-  // 2. Point to the "top" of the stack (it grows down).
-  // stack is from stack_low to stack_low + STACK_SIZE - 1, so the top is
-  // stack_low + STACK_SIZE.
   uint64_t *stack_ptr = (uint64_t *)((uintptr_t)stack_low + STACK_SIZE);
+
+  // Calculate program headers virtual address in the loaded image
+  uintptr_t phdr_addr = 0;
+  uint16_t phnum = 0;
+  phnum = elf->elf_header.e_phnum;
+  for (int i = 0; i < phnum; i++) {
+    if (elf->program_headers[i].p_type == PT_LOAD) {
+      uintptr_t seg_start =
+          ALIGN_DOWN(elf->program_headers[i].p_vaddr, page_size);
+      off_t file_off = ALIGN_DOWN(elf->program_headers[i].p_offset, page_size);
+      phdr_addr =
+          base + seg_start + (elf->elf_header.e_phoff - (uint64_t)file_off);
+      break;
+    }
+  }
+
+  int total_pushes = 2; // for random_data[0] and random_data[1]
+  int aux_count = 6; // AT_NULL, AT_RANDOM, AT_PAGESZ, AT_PHNUM, AT_ENTRY pairs
+  if (phdr_addr != 0)
+    aux_count++;
+
+  total_pushes +=
+      (aux_count * 2);  // Each aux entry is a type + value pair (2 slots)
+  total_pushes += 1;    // envp NULL terminator
+  total_pushes += 1;    // argv NULL terminator
+  total_pushes += argc; // the actual argv pointers
+  total_pushes += 1;    // argc itself
+  if (total_pushes % 2 != 0) {
+    --stack_ptr; // Drop an extra 8 bytes to act as padding
+  }
 
   // 16 random bytes for AT_RANDOM (stack canary seed)
   uint64_t random_data[2] = {0};
@@ -87,20 +167,6 @@ void setup_and_jump(uintptr_t entry_point, Elf64_Data *elf, int argc,
   *(--stack_ptr) = random_data[1];
   *(--stack_ptr) = random_data[0];
   uintptr_t rand_addr = (uintptr_t)stack_ptr;
-
-  // Calculate program headers virtual address in the loaded image
-  uintptr_t phdr_addr = 0;
-  uint16_t phnum = 0;
-  phnum = elf->elf_header.e_phnum;
-  for (int i = 0; i < phnum; i++) {
-    if (elf->program_headers[i].p_type == PT_LOAD) {
-      uintptr_t seg_start =
-          ALIGN_DOWN(elf->program_headers[i].p_vaddr, page_size);
-      off_t file_off = ALIGN_DOWN(elf->program_headers[i].p_offset, page_size);
-      phdr_addr = seg_start + (elf->elf_header.e_phoff - (uint64_t)file_off);
-      break;
-    }
-  }
 
   // Push auxiliary vector (high to low address)
   *(--stack_ptr) = 0; // AT_NULL a_val

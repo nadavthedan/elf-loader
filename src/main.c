@@ -15,6 +15,7 @@ char **main_args_parse(int argc, char *argv[]) {
 int main(int argc, char *argv[]) {
   printf("Started program\n");
   int ret;
+  uintptr_t base;
   int elf_argc;
   char **elf_argv;
   Elf64_Data headers;
@@ -32,13 +33,13 @@ int main(int argc, char *argv[]) {
     return -1;
   }
 
-  ret = elf_static_load_to_memory(fp, &headers);
-  if (ret != 0) {
+  base = elf_static_load_to_memory(fp, &headers);
+  if (base == (uintptr_t)-1) {
     printf("ERROR: failed elf static load to memory\n");
     return 1;
   }
   uintptr_t entry = headers.elf_header.e_entry;
 
-  setup_and_jump(entry, &headers, elf_argc, elf_argv);
+  setup_and_jump(base + entry, base, &headers, elf_argc, elf_argv);
   fclose(fp);
 }

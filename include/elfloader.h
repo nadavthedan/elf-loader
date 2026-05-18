@@ -11,6 +11,6 @@
 int elf_static_load_to_memory(FILE *fp, Elf64_Data *elf);
 
 // allocates stack, sets up initial register state jumps to entry point.
-void setup_and_jump(uintptr_t entry_point, Elf64_Data *elf, int argc,
-                    char *argv[]);
+void setup_and_jump(uintptr_t entry_point, uintptr_t base, Elf64_Data *elf,
+                    int argc, char *argv[]);
 #endif
