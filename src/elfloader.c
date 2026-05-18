@@ -62,42 +62,83 @@ void *elf_reserve_memory(Elf64_Data *elf, ElfLoadVaddrBounds *bounds) {
   return mapping;
 }
 
-uintptr_t elf_load_to_memory(FILE *fp, Elf64_Data *elf) {
-  int i;
+int elf_ph_load_handle(Elf64_Phdr *phdr, int fd, uintptr_t base) {
   int page_size = getpagesize();
+  uint32_t prots = PROT_NONE;
+
+  uintptr_t seg_start = ALIGN_DOWN(phdr->p_vaddr, page_size);
+  uintptr_t page_offset = phdr->p_vaddr - seg_start;
+  size_t map_size = ALIGN_UP(page_offset + phdr->p_memsz, page_size);
+  off_t file_off = ALIGN_DOWN(phdr->p_offset, page_size);
+
+  if (phdr->p_flags & PF_X)
+    prots |= PROT_EXEC;
+  if (phdr->p_flags & PF_W)
+    prots |= PROT_WRITE;
+  if (phdr->p_flags & PF_R)
+    prots |= PROT_READ;
+
+  void *mem = mmap((void *)(base + seg_start), map_size, prots,
+                   MAP_FIXED | MAP_PRIVATE, fd, file_off);
+  if (mem == MAP_FAILED) {
+    printf("ERROR: Failed mmap.\n");
+    return -1;
+  }
+
+  uintptr_t data_offset = phdr->p_vaddr - seg_start;
+  if (phdr->p_filesz < phdr->p_memsz) {
+    memset(mem + phdr->p_filesz + data_offset, 0,
+           phdr->p_memsz - phdr->p_filesz);
+  }
+  return 0;
+}
+
+int elf_ph_dyn_handle(Elf64_Phdr *phdr, uintptr_t base) {
+  if (phdr->p_type == PT_DYNAMIC) {
+    Elf64_Dyn *dyn = (Elf64_Dyn *)(base + phdr->p_vaddr);
+    Elf64_Rela *rela = NULL;
+    size_t relasz = 0;
+
+    for (; dyn->d_tag != DT_NULL; dyn++) {
+      if (dyn->d_tag == DT_RELA)
+        rela = (Elf64_Rela *)(base + dyn->d_un.d_ptr);
+      if (dyn->d_tag == DT_RELASZ)
+        relasz = dyn->d_un.d_val;
+    }
+    if (rela && relasz) {
+      size_t count = relasz / sizeof(Elf64_Rela);
+      for (size_t j = 0; j < count; j++) {
+        if (ELF64_R_TYPE(rela[j].r_info) == R_X86_64_RELATIVE) {
+          uintptr_t *patch_addr = (uintptr_t *)(base + rela[j].r_offset);
+          *patch_addr = base + rela[j].r_addend;
+        }
+      }
+    }
+  }
+  return 0;
+}
+
+uintptr_t elf_load_to_memory(FILE *fp, Elf64_Data *elf) {
+  uint64_t i;
+  int64_t ret;
   ElfLoadVaddrBounds bounds;
   void *res = elf_reserve_memory(elf, &bounds);
   uintptr_t base = (uintptr_t)res - bounds.min_vaddr;
   for (i = 0; i < elf->elf_header.e_phnum; i++) {
     Elf64_Phdr phdr = elf->program_headers[i];
-    uint32_t prots = PROT_NONE;
-    if (phdr.p_type == PT_LOAD) {
-      uintptr_t seg_start = ALIGN_DOWN(phdr.p_vaddr, page_size);
-
-      uintptr_t page_offset = phdr.p_vaddr - seg_start;
-      size_t map_size = ALIGN_UP(page_offset + phdr.p_memsz, page_size);
-
-      off_t file_off = ALIGN_DOWN(phdr.p_offset, page_size);
-
-      if (phdr.p_flags & PF_X) {
-        prots |= PROT_EXEC;
-      }
-      if (phdr.p_flags & PF_W)
-        prots |= PROT_WRITE;
-      if (phdr.p_flags & PF_R)
-        prots |= PROT_READ;
-      void *mem = mmap((void *)(base + seg_start), map_size, prots,
-                       MAP_FIXED | MAP_PRIVATE, fileno(fp), file_off);
-      if (mem == MAP_FAILED) {
-        printf("ERROR: Failed mmap.\n");
-        return -1;
-      }
-
-      uintptr_t data_offset = phdr.p_vaddr - seg_start;
-      if (phdr.p_filesz < phdr.p_memsz) {
-        memset(mem + phdr.p_filesz + data_offset, 0,
-               phdr.p_memsz - phdr.p_filesz);
-      }
+    switch (phdr.p_type) {
+    case PT_LOAD:
+      ret = elf_ph_load_handle(&phdr, fileno(fp), base);
+      break;
+    case PT_DYNAMIC:
+      ret = elf_ph_dyn_handle(&phdr, base);
+      break;
+    }
+    if (ret == -1) {
+      printf("ERROR: Failed to load elf to memory. faild on program header of "
+             "type %d",
+             phdr.p_type);
+      return -1;
     }
   }
   return base;
