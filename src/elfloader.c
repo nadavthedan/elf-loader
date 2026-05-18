@@ -62,7 +62,7 @@ void *elf_reserve_memory(Elf64_Data *elf, ElfLoadVaddrBounds *bounds) {
   return mapping;
 }
 
-uintptr_t elf_static_load_to_memory(FILE *fp, Elf64_Data *elf) {
+uintptr_t elf_load_to_memory(FILE *fp, Elf64_Data *elf) {
   int i;
   int page_size = getpagesize();
   ElfLoadVaddrBounds bounds;

@@ -6,8 +6,8 @@
 
 char **main_args_parse(int argc, char *argv[]) {
   if (argc < 2) {
-    return NULL;
     printf("ERROR: Program did not receive enough arguments\n");
+    return NULL;
   }
   return argv + 1;
 }
@@ -33,7 +33,7 @@ int main(int argc, char *argv[]) {
     return -1;
   }
 
-  base = elf_static_load_to_memory(fp, &headers);
+  base = elf_load_to_memory(fp, &headers);
   if (base == (uintptr_t)-1) {
     printf("ERROR: failed elf static load to memory\n");
     return 1;
