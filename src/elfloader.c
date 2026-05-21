@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/types.h>
 #include <unistd.h>
 
 #define ALIGN_DOWN(x, pagesize) ((x) & ~((pagesize) - 1))
@@ -16,6 +17,44 @@ typedef struct {
   uintptr_t min_vaddr;
   uintptr_t max_vaddr;
 } ElfLoadVaddrBounds;
+
+typedef struct {
+  uint32_t *sysVhashtab;
+  Elf64_Sym *symboltab;
+  char *strtab;
+} SymResolutionPtrs;
+
+void *elf_resolve_sym_addr(SymResolutionPtrs *symres, const char *symname,
+                           uintptr_t base) {
+  uint32_t hash = elf_hash((const unsigned char *)symname);
+  uint32_t nbuckets = symres->sysVhashtab[0];
+  uint32_t nchains = symres->sysVhashtab[1];
+
+  uint32_t bucket_index = hash % nbuckets;
+  uint32_t sym_index = symres->sysVhashtab[2 + bucket_index];
+
+  while (sym_index != 0) {
+    if (sym_index >= nchains) {
+      return (void *)-1;
+    }
+
+    uint32_t name_off = symres->symboltab[sym_index].st_name;
+    char *name = symres->strtab + name_off;
+
+    if (strcmp(name, symname) == 0) {
+      Elf64_Sym *sym = &symres->symboltab[sym_index];
+
+      if (sym->st_shndx == SHN_UNDEF) {
+        return (void *)-1;
+      }
+
+      return (void *)base + sym->st_value;
+    }
+
+    sym_index = symres->sysVhashtab[2 + nbuckets + sym_index];
+  }
+  return (void *)-1;
+}
 
 int elf_calculate_total_vaddr(Elf64_Data *elf, ElfLoadVaddrBounds *bounds) {
   uint16_t i;
@@ -62,7 +101,7 @@ void *elf_reserve_memory(Elf64_Data *elf, ElfLoadVaddrBounds *bounds) {
   return mapping;
 }
 
-int elf_ph_load_handle(Elf64_Phdr *phdr, int fd, uintptr_t base) {
+int elf_ph_handle_load(Elf64_Phdr *phdr, uintptr_t base, uint64_t fd) {
   int page_size = getpagesize();
   uint32_t prots = PROT_NONE;
 
@@ -93,7 +132,8 @@ int elf_ph_load_handle(Elf64_Phdr *phdr, int fd, uintptr_t base) {
   return 0;
 }
 
-int elf_ph_dyn_handle(Elf64_Phdr *phdr, uintptr_t base) {
+int elf_ph_handle_dyn(Elf64_Phdr *phdr, uintptr_t base,
+                      SymResolutionPtrs *symres) {
   if (phdr->p_type == PT_DYNAMIC) {
     Elf64_Dyn *dyn = (Elf64_Dyn *)(base + phdr->p_vaddr);
     Elf64_Rela *rela = NULL;
@@ -104,17 +144,41 @@ int elf_ph_dyn_handle(Elf64_Phdr *phdr, uintptr_t base) {
         rela = (Elf64_Rela *)(base + dyn->d_un.d_ptr);
       if (dyn->d_tag == DT_RELASZ)
         relasz = dyn->d_un.d_val;
+      if (dyn->d_tag == DT_SYMTAB)
+        symres->symboltab = (Elf64_Sym *)(base + dyn->d_un.d_ptr);
+      if (dyn->d_tag == DT_STRTAB)
+        symres->strtab = (char *)(base + dyn->d_un.d_ptr);
+      if (dyn->d_tag == DT_HASH)
+        symres->sysVhashtab = (uint32_t *)(base + dyn->d_un.d_ptr);
     }
     if (rela && relasz) {
       size_t count = relasz / sizeof(Elf64_Rela);
-      for (size_t j = 0; j < count; j++) {
-        if (ELF64_R_TYPE(rela[j].r_info) == R_X86_64_RELATIVE) {
-          uintptr_t *patch_addr = (uintptr_t *)(base + rela[j].r_offset);
-          *patch_addr = base + rela[j].r_addend;
+      for (size_t i = 0; i < count; i++) {
+        uint64_t type = ELF64_R_TYPE(rela[i].r_info);
+        uint64_t sym_idx = ELF64_M_SYM(rela[i].r_info);
+        uintptr_t *target = (uintptr_t *)(base + rela[i].r_offset);
+        char *name;
+        switch (type) {
+        case R_X86_64_RELATIVE:
+          *target = base + rela[i].r_addend;
+          break;
+        case R_X86_64_JUMP_SLOT:
+        case R_X86_64_GLOB_DAT:
+          name = symres->strtab + symres->symboltab[sym_idx].st_name;
+          uintptr_t addr = (uintptr_t)elf_resolve_sym_addr(symres, name, base);
+          *target = addr;
+          break;
         }
       }
     }
+  } else {
+    return -1;
   }
+  return 0;
+}
+
+int elf_ph_interp_handle(Elf64_Phdr *phdr, uintptr_t base) {
+  char *interperter_path = "";
   return 0;
 }
 
@@ -122,16 +186,20 @@ uintptr_t elf_load_to_memory(FILE *fp, Elf64_Data *elf) {
   uint64_t i;
   int64_t ret;
   ElfLoadVaddrBounds bounds;
+  SymResolutionPtrs symres;
   void *res = elf_reserve_memory(elf, &bounds);
   uintptr_t base = (uintptr_t)res - bounds.min_vaddr;
   for (i = 0; i < elf->elf_header.e_phnum; i++) {
     Elf64_Phdr phdr = elf->program_headers[i];
     switch (phdr.p_type) {
     case PT_LOAD:
-      ret = elf_ph_load_handle(&phdr, fileno(fp), base);
+      ret = elf_ph_handle_load(&phdr, base, fileno(fp));
       break;
     case PT_DYNAMIC:
-      ret = elf_ph_dyn_handle(&phdr, base);
+      ret = elf_ph_handle_dyn(&phdr, base, &symres);
+      break;
+    case PT_INTERP:
+      ret = elf_ph_interp_handle(&phdr, base);
       break;
     }
     if (ret == -1) {
