@@ -73,3 +73,16 @@ int elf_headers_read(FILE *fp, Elf64_Data *elf) {
   fread(elf->section_headers, sizeof(Elf64_Shdr), elf->elf_header.e_shnum, fp);
   return 0;
 }
+
+uint32_t elf_hash(const unsigned char *name) {
+  uint32_t h = 0, g;
+  while (*name) {
+    h = (h << 4) + *name++;
+    g = h & 0xf0000000;
+    if (g) {
+      h ^= g >> 24;
+    }
+    h &= ~g;
+  }
+  return h;
+}

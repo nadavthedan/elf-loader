@@ -22,4 +22,6 @@ int elf_headers_read(FILE *fp, Elf64_Data *elf);
 int populate_str_table(Elf64_Data *elf, char **str_table, uint shidx, FILE *fp);
 
 int read_section(void **section, size_t size, Elf64_Shdr shdr, FILE *fp);
+
+uint32_t elf_hash(const unsigned char *name);
 #endif
