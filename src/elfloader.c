@@ -1,3 +1,4 @@
+#include "elfloader.h"
 #include "elfutils.h"
 #include <elf.h>
 #include <stddef.h>
@@ -12,17 +13,6 @@
 #define ALIGN_DOWN(x, pagesize) ((x) & ~((pagesize) - 1))
 #define ALIGN_UP(x, pagesize) (((x) + ((pagesize) - 1)) & ~((pagesize) - 1))
 #define STACK_SIZE (1024 * 1024) // 1MB stack
-
-typedef struct {
-  uintptr_t min_vaddr;
-  uintptr_t max_vaddr;
-} ElfLoadVaddrBounds;
-
-typedef struct {
-  uint32_t *sysVhashtab;
-  Elf64_Sym *symboltab;
-  char *strtab;
-} SymResolutionPtrs;
 
 void *elf_resolve_sym_addr(SymResolutionPtrs *symres, const char *symname,
                            uintptr_t base) {
@@ -138,6 +128,9 @@ int elf_ph_handle_dyn(Elf64_Phdr *phdr, uintptr_t base,
     Elf64_Dyn *dyn = (Elf64_Dyn *)(base + phdr->p_vaddr);
     Elf64_Rela *rela = NULL;
     size_t relasz = 0;
+    char **needed = NULL;
+    uint64_t *needed_count = 0;
+    char *runpath = NULL;
 
     for (; dyn->d_tag != DT_NULL; dyn++) {
       if (dyn->d_tag == DT_RELA)
@@ -150,6 +143,17 @@ int elf_ph_handle_dyn(Elf64_Phdr *phdr, uintptr_t base,
         symres->strtab = (char *)(base + dyn->d_un.d_ptr);
       if (dyn->d_tag == DT_HASH)
         symres->sysVhashtab = (uint32_t *)(base + dyn->d_un.d_ptr);
+      if (dyn->d_tag == DT_NEEDED) {
+        char **temp = realloc(needed, (*needed_count + 1) * sizeof(char *));
+        if (!temp) {
+          // TODO: deal with this
+        }
+        needed = temp;
+        needed[*needed_count] = (char *)dyn->d_un.d_ptr;
+        (*needed_count)++;
+      }
+      if (dyn->d_tag == DT_RUNPATH)
+        runpath = (char *)dyn->d_un.d_ptr;
     }
     if (rela && relasz) {
       size_t count = relasz / sizeof(Elf64_Rela);
@@ -177,11 +181,6 @@ int elf_ph_handle_dyn(Elf64_Phdr *phdr, uintptr_t base,
   return 0;
 }
 
-int elf_ph_interp_handle(Elf64_Phdr *phdr, uintptr_t base) {
-  char *interperter_path = "";
-  return 0;
-}
-
 uintptr_t elf_load_to_memory(FILE *fp, Elf64_Data *elf) {
   uint64_t i;
   int64_t ret;
@@ -199,7 +198,7 @@ uintptr_t elf_load_to_memory(FILE *fp, Elf64_Data *elf) {
       ret = elf_ph_handle_dyn(&phdr, base, &symres);
       break;
     case PT_INTERP:
-      ret = elf_ph_interp_handle(&phdr, base);
+      // ret = elf_ph_interp_handle(&phdr, base);
       break;
     }
     if (ret == -1) {
@@ -210,6 +209,105 @@ uintptr_t elf_load_to_memory(FILE *fp, Elf64_Data *elf) {
     }
   }
   return base;
+}
+
+void elf_handle_dyn(Elf64_Data *elf, uintptr_t base, DynPtrs *dyn_ptrs) {
+  uint64_t i;
+  for (i = 0; i < elf->elf_header.e_phnum; i++) {
+    Elf64_Phdr phdr = elf->program_headers[i];
+    if (phdr.p_type == PT_DYNAMIC) {
+      Elf64_Dyn *dyn = (Elf64_Dyn *)(base + phdr.p_vaddr);
+
+      for (; dyn->d_tag != DT_NULL; dyn++) {
+        if (dyn->d_tag == DT_RELA)
+          dyn_ptrs->rela_data.rela = (Elf64_Rela *)(base + dyn->d_un.d_ptr);
+        if (dyn->d_tag == DT_RELASZ)
+          dyn_ptrs->rela_data.relasz = dyn->d_un.d_val;
+        if (dyn->d_tag == DT_SYMTAB)
+          dyn_ptrs->symres.symboltab = (Elf64_Sym *)(base + dyn->d_un.d_ptr);
+        if (dyn->d_tag == DT_STRTAB)
+          dyn_ptrs->symres.strtab = (char *)(base + dyn->d_un.d_ptr);
+        if (dyn->d_tag == DT_HASH)
+          dyn_ptrs->symres.sysVhashtab = (uint32_t *)(base + dyn->d_un.d_ptr);
+        if (dyn->d_tag == DT_NEEDED) {
+          char **temp =
+              realloc(dyn_ptrs->needed_data.needed,
+                      (dyn_ptrs->needed_data.neededsz + 1) * sizeof(char *));
+          if (!temp) {
+            // TODO: deal with this
+          }
+          dyn_ptrs->needed_data.needed = temp;
+          dyn_ptrs->needed_data.needed[dyn_ptrs->needed_data.neededsz] =
+              (char *)dyn->d_un.d_ptr;
+          (dyn_ptrs->needed_data.neededsz)++;
+        }
+        if (dyn->d_tag == DT_RUNPATH)
+          dyn_ptrs->needed_data.runpath = (char *)dyn->d_un.d_ptr;
+      }
+    }
+  }
+}
+
+void elf_handle_reallocations(DynPtrs *dyn_ptrs, uintptr_t base) {
+  Elf64_Rela *rela = dyn_ptrs->rela_data.rela;
+  uint32_t relasz = dyn_ptrs->rela_data.relasz;
+  SymResolutionPtrs symres = dyn_ptrs->symres;
+
+  if (rela && relasz) {
+    size_t count = relasz / sizeof(Elf64_Rela);
+    for (size_t i = 0; i < count; i++) {
+      uint64_t type = ELF64_R_TYPE(rela[i].r_info);
+      uint64_t sym_idx = ELF64_M_SYM(rela[i].r_info);
+      uintptr_t *target = (uintptr_t *)(base + rela[i].r_offset);
+      char *name;
+      switch (type) {
+      case R_X86_64_RELATIVE:
+        *target = base + rela[i].r_addend;
+        break;
+      case R_X86_64_JUMP_SLOT:
+      case R_X86_64_GLOB_DAT:
+        name = symres.strtab + symres.symboltab[sym_idx].st_name;
+        uintptr_t addr = (uintptr_t)elf_resolve_sym_addr(&symres, name, base);
+        *target = addr;
+        break;
+      }
+    }
+  }
+}
+
+char *find_lib_path(const char *soname) {
+  const char *search_paths[] = {"/lib/x86_64-linux-gnu",
+                                "/usr/lib/x86_64-linux-gnu", "/lib64", NULL};
+
+  for (int i = 0; search_paths[i] != NULL; i++) {
+    char full_path[1024];
+    snprintf(full_path, sizeof(full_path), "%s/%s", search_paths[i], soname);
+
+    if (access(full_path, F_OK) == 0) {
+      return strdup(full_path);
+    }
+  }
+  return NULL;
+}
+
+void elf_load_rec(LoadedLib *elf_lib) {
+  uint32_t i;
+  elf_lib->path = find_lib_path(elf_lib->soname);
+  FILE *fp = fopen(elf_lib->path, "rb");
+  elf_headers_read(fp, &elf_lib->headers);
+  ElfLoadVaddrBounds lib_bounds;
+  void *res = elf_reserve_memory(&elf_lib->headers, &lib_bounds);
+  elf_lib->base = (uintptr_t)res - lib_bounds.min_vaddr;
+  elf_handle_dyn(&elf_lib->headers, elf_lib->base, &elf_lib->dyn_ptrs);
+  elf_handle_reallocations(&elf_lib->dyn_ptrs, elf_lib->base);
+  for (i = 0; i < elf_lib->dyn_ptrs.needed_data.neededsz; i++) {
+    // TODO: make this work for appending the next of a lib
+    LoadedLib *next_lib = malloc(sizeof(LoadedLib));
+    next_lib->soname = elf_lib->dyn_ptrs.needed_data.needed[i];
+    elf_load_rec(next_lib);
+    if (next_lib->next) {
+    }
+  }
 }
 
 void execute_entry(uintptr_t entry, void *stack_ptr) {
