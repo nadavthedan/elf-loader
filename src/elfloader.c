@@ -290,7 +290,7 @@ char *find_lib_path(const char *soname) {
   return NULL;
 }
 
-void elf_load_rec(LoadedLib *elf_lib) {
+void elf_load_lib(LoadedLib *elf_lib) {
   uint32_t i;
   elf_lib->path = find_lib_path(elf_lib->soname);
   FILE *fp = fopen(elf_lib->path, "rb");
@@ -300,12 +300,14 @@ void elf_load_rec(LoadedLib *elf_lib) {
   elf_lib->base = (uintptr_t)res - lib_bounds.min_vaddr;
   elf_handle_dyn(&elf_lib->headers, elf_lib->base, &elf_lib->dyn_ptrs);
   elf_handle_reallocations(&elf_lib->dyn_ptrs, elf_lib->base);
+  LoadedLib *next = elf_lib;
   for (i = 0; i < elf_lib->dyn_ptrs.needed_data.neededsz; i++) {
-    // TODO: make this work for appending the next of a lib
     LoadedLib *next_lib = malloc(sizeof(LoadedLib));
+    next->next = next_lib;
     next_lib->soname = elf_lib->dyn_ptrs.needed_data.needed[i];
-    elf_load_rec(next_lib);
-    if (next_lib->next) {
+    elf_load_lib(next_lib);
+    while (next->next != NULL) {
+      next = next->next;
     }
   }
 }
