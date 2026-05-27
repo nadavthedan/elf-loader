@@ -211,6 +211,50 @@ uintptr_t elf_load_to_memory(FILE *fp, Elf64_Data *elf) {
   return base;
 }
 
+void elf_handle_load(Elf64_Data *elf, uintptr_t base, int fd) {
+  int page_size = getpagesize();
+  uint64_t i;
+  for (i = 0; i < elf->elf_header.e_phnum; i++) {
+    Elf64_Phdr phdr = elf->program_headers[i];
+    uint32_t prots = PROT_NONE;
+    if (phdr.p_type == PT_LOAD) {
+      uintptr_t seg_start = ALIGN_DOWN(phdr.p_vaddr, page_size);
+      uintptr_t page_offset = phdr.p_vaddr - seg_start;
+      size_t map_size = ALIGN_UP(page_offset + phdr.p_memsz, page_size);
+      off_t file_off = ALIGN_DOWN(phdr.p_offset, page_size);
+
+      if (phdr.p_flags & PF_X)
+        prots |= PROT_EXEC;
+      if (phdr.p_flags & PF_W)
+        prots |= PROT_WRITE;
+      if (phdr.p_flags & PF_R)
+        prots |= PROT_READ;
+
+      void *mem =
+          mmap((void *)(base + seg_start), map_size, PROT_READ | PROT_WRITE,
+               MAP_FIXED | MAP_PRIVATE, fd, file_off);
+
+      if (mem == MAP_FAILED) {
+        printf("ERROR: Failed mmap.\n");
+        return; // TODO: handle
+      }
+
+      uintptr_t data_offset = phdr.p_vaddr - seg_start;
+      if (phdr.p_filesz < phdr.p_memsz) {
+        memset(mem + phdr.p_filesz + data_offset, 0,
+               phdr.p_memsz - phdr.p_filesz);
+      }
+
+      if (mprotect(mem, map_size, prots) != 0) {
+        printf("ERROR: Failed to mprotect PT_LOAD segment.\n");
+        return; // TODO: Handle
+      }
+    }
+  }
+
+  return; // TODO: handle success
+}
+
 void elf_handle_dyn(Elf64_Data *elf, uintptr_t base, DynPtrs *dyn_ptrs) {
   uint64_t i;
   for (i = 0; i < elf->elf_header.e_phnum; i++) {
@@ -243,15 +287,36 @@ void elf_handle_dyn(Elf64_Data *elf, uintptr_t base, DynPtrs *dyn_ptrs) {
         }
         if (dyn->d_tag == DT_RUNPATH)
           dyn_ptrs->needed_data.runpath = (char *)dyn->d_un.d_ptr;
+        if (dyn->d_tag == DT_INIT)
+          dyn_ptrs->init_data.init_func = dyn->d_un.d_ptr;
+        if (dyn->d_tag == DT_INIT_ARRAY)
+          dyn_ptrs->init_data.init_array =
+              (uintptr_t *)(base + dyn->d_un.d_ptr);
+        if (dyn->d_tag == DT_INIT_ARRAYSZ)
+          dyn_ptrs->init_data.init_arraysz = dyn->d_un.d_val;
       }
     }
   }
 }
 
-void elf_handle_reallocations(DynPtrs *dyn_ptrs, uintptr_t base) {
-  Elf64_Rela *rela = dyn_ptrs->rela_data.rela;
-  uint32_t relasz = dyn_ptrs->rela_data.relasz;
-  SymResolutionPtrs symres = dyn_ptrs->symres;
+uintptr_t elf_resolve_global_symbol(const char *name, LoadedLib *root_list) {
+  LoadedLib *curr = root_list;
+  while (curr != NULL) {
+    uintptr_t addr = (uintptr_t)elf_resolve_sym_addr(&curr->dyn_ptrs.symres,
+                                                     name, curr->base);
+    if (addr != (uintptr_t)-1) {
+      return addr;
+    }
+    curr = curr->next;
+  }
+  return (uintptr_t)-1;
+}
+
+void elf_handle_reallocations(LoadedLib *lib) {
+  Elf64_Rela *rela = lib->dyn_ptrs.rela_data.rela;
+  uint32_t relasz = lib->dyn_ptrs.rela_data.relasz;
+  SymResolutionPtrs symres = lib->dyn_ptrs.symres;
+  uintptr_t base = lib->base;
 
   if (rela && relasz) {
     size_t count = relasz / sizeof(Elf64_Rela);
@@ -267,7 +332,7 @@ void elf_handle_reallocations(DynPtrs *dyn_ptrs, uintptr_t base) {
       case R_X86_64_JUMP_SLOT:
       case R_X86_64_GLOB_DAT:
         name = symres.strtab + symres.symboltab[sym_idx].st_name;
-        uintptr_t addr = (uintptr_t)elf_resolve_sym_addr(&symres, name, base);
+        uintptr_t addr = (uintptr_t)elf_resolve_global_symbol(name, lib);
         *target = addr;
         break;
       }
@@ -290,6 +355,33 @@ char *find_lib_path(const char *soname) {
   return NULL;
 }
 
+void elf_run_init_routines(LoadedLib *lib) {
+  if (lib->dyn_ptrs.init_data.init_func) {
+    void (*init_fn)(void) =
+        (void (*)(void))(lib->base + lib->dyn_ptrs.init_data.init_func);
+    init_fn();
+  }
+
+  if (lib->dyn_ptrs.init_data.init_array &&
+      lib->dyn_ptrs.init_data.init_arraysz) {
+    size_t count = lib->dyn_ptrs.init_data.init_arraysz / sizeof(uintptr_t);
+    for (size_t i = 0; i < count; i++) {
+      uintptr_t func_addr = lib->dyn_ptrs.init_data.init_array[i];
+      if (func_addr == 0 || func_addr == (uintptr_t)-1)
+        continue;
+      void (*init_array_fn)(void) = (void (*)(void))func_addr;
+      init_array_fn();
+    }
+  }
+}
+
+void elf_handle_init_execution_order(LoadedLib *lib) {
+  if (lib->next != NULL) {
+    elf_handle_init_execution_order(lib->next);
+  }
+  elf_run_init_routines(lib);
+}
+
 void elf_load_lib(LoadedLib *elf_lib) {
   uint32_t i;
   elf_lib->path = find_lib_path(elf_lib->soname);
@@ -298,31 +390,20 @@ void elf_load_lib(LoadedLib *elf_lib) {
   ElfLoadVaddrBounds lib_bounds;
   void *res = elf_reserve_memory(&elf_lib->headers, &lib_bounds);
   elf_lib->base = (uintptr_t)res - lib_bounds.min_vaddr;
+  elf_handle_load(&elf_lib->headers, elf_lib->base, fileno(fp));
   elf_handle_dyn(&elf_lib->headers, elf_lib->base, &elf_lib->dyn_ptrs);
-  elf_handle_reallocations(&elf_lib->dyn_ptrs, elf_lib->base);
-  LoadedLib *next = elf_lib;
+  LoadedLib *current = elf_lib;
   for (i = 0; i < elf_lib->dyn_ptrs.needed_data.neededsz; i++) {
-    LoadedLib *next_lib = malloc(sizeof(LoadedLib));
-    next->next = next_lib;
+    LoadedLib *next_lib = calloc(1, sizeof(LoadedLib));
+    current->next = next_lib;
     next_lib->soname = elf_lib->dyn_ptrs.needed_data.needed[i];
     elf_load_lib(next_lib);
-    while (next->next != NULL) {
-      next = next->next;
+    while (current->next != NULL) {
+      current = current->next;
     }
   }
-}
-
-uintptr_t elf_resolve_global_symbol(const char *name, LoadedLib *root_list) {
-  LoadedLib *curr = root_list;
-  while (curr != NULL) {
-    uintptr_t addr = (uintptr_t)elf_resolve_sym_addr(&curr->dyn_ptrs.symres,
-                                                     name, curr->base);
-    if (addr != (uintptr_t)-1) {
-      return addr;
-    }
-    curr = curr->next;
-  }
-  return (uintptr_t)-1;
+  elf_handle_reallocations(elf_lib);
+  elf_handle_init_execution_order(elf_lib);
 }
 
 void execute_entry(uintptr_t entry, void *stack_ptr) {

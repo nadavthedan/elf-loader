@@ -31,9 +31,16 @@ typedef struct {
 } NeededData;
 
 typedef struct {
+  uintptr_t init_func;
+  uintptr_t *init_array;
+  size_t init_arraysz;
+} InitData;
+
+typedef struct {
   SymResolutionPtrs symres;
   RelaData rela_data;
   NeededData needed_data;
+  InitData init_data;
 } DynPtrs;
 
 typedef struct LoadedLib {
