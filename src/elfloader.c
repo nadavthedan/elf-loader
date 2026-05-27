@@ -312,6 +312,19 @@ void elf_load_lib(LoadedLib *elf_lib) {
   }
 }
 
+uintptr_t elf_resolve_global_symbol(const char *name, LoadedLib *root_list) {
+  LoadedLib *curr = root_list;
+  while (curr != NULL) {
+    uintptr_t addr = (uintptr_t)elf_resolve_sym_addr(&curr->dyn_ptrs.symres,
+                                                     name, curr->base);
+    if (addr != (uintptr_t)-1) {
+      return addr;
+    }
+    curr = curr->next;
+  }
+  return (uintptr_t)-1;
+}
+
 void execute_entry(uintptr_t entry, void *stack_ptr) {
   __asm__ volatile(
       "mov %0, %%rsp\n\t"    // Set the stack pointer to our new stack
