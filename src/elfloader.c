@@ -312,7 +312,7 @@ uintptr_t elf_resolve_global_symbol(const char *name, LoadedLib *root_list) {
   return (uintptr_t)-1;
 }
 
-void elf_handle_reallocations(LoadedLib *lib) {
+int16_t elf_handle_reallocations(LoadedLib *lib) {
   Elf64_Rela *rela = lib->dyn_ptrs.rela_data.rela;
   uint32_t relasz = lib->dyn_ptrs.rela_data.relasz;
   SymResolutionPtrs symres = lib->dyn_ptrs.symres;
@@ -338,6 +338,7 @@ void elf_handle_reallocations(LoadedLib *lib) {
       }
     }
   }
+  return 0;
 }
 
 char *find_lib_path(const char *soname) {
@@ -375,14 +376,15 @@ void elf_run_init_routines(LoadedLib *lib) {
   }
 }
 
-void elf_handle_init_execution_order(LoadedLib *lib) {
+int16_t elf_handle_init_execution_order(LoadedLib *lib) {
   if (lib->next != NULL) {
     elf_handle_init_execution_order(lib->next);
   }
   elf_run_init_routines(lib);
+  return 0;
 }
 
-void elf_load_lib(LoadedLib *elf_lib) {
+int16_t elf_load_lib(LoadedLib *elf_lib) {
   uint32_t i;
   elf_lib->path = find_lib_path(elf_lib->soname);
   FILE *fp = fopen(elf_lib->path, "rb");
@@ -402,8 +404,9 @@ void elf_load_lib(LoadedLib *elf_lib) {
       current = current->next;
     }
   }
-  elf_handle_reallocations(elf_lib);
-  elf_handle_init_execution_order(elf_lib);
+  return 0;
+  // elf_handle_reallocations(elf_lib);
+  // elf_handle_init_execution_order(elf_lib);
 }
 
 void execute_entry(uintptr_t entry, void *stack_ptr) {
