@@ -456,7 +456,11 @@ int16_t elf_handle_reallocations(LoadedLib *lib, LoadedLib *root_lib) {
         break;
       case R_X86_64_64:
         name = symres.strtab + symres.symboltab[sym_idx].st_name;
-        addr = (uintptr_t)elf_resolve_global_symbol(name, root_lib);
+        if (ELF64_ST_BIND(symres.symboltab[sym_idx].st_info) == STB_LOCAL) {
+          addr = base + symres.symboltab[sym_idx].st_value;
+        } else {
+          addr = (uintptr_t)elf_resolve_global_symbol(name, root_lib);
+        }
         if (addr == (uintptr_t)-1) {
           Elf64_Sym *sym = &symres.symboltab[sym_idx];
           if (ELF64_ST_BIND(sym->st_info) == STB_WEAK) {
