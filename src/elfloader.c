@@ -38,6 +38,11 @@ void *elf_resolve_sym_addr(SymResolutionPtrs *symres, const char *symname,
         return (void *)-1;
       }
 
+      if (ELF64_ST_BIND(sym->st_info) == STB_LOCAL) {
+        sym_index = symres->sysVhashtab[2 + nbuckets + sym_index];
+        continue;
+      }
+
       return (void *)base + sym->st_value;
     }
 
@@ -49,7 +54,7 @@ void *elf_resolve_sym_addr(SymResolutionPtrs *symres, const char *symname,
 void *elf_resolve_sym_addr_gnu(SymResolutionPtrs *symres, const char *symname,
                                uintptr_t base) {
   if (!symres->gnu_hashtab) {
-    return NULL;
+    return (void *)-1;
   }
 
   uint32_t *header = symres->gnu_hashtab;
@@ -71,7 +76,7 @@ void *elf_resolve_sym_addr_gnu(SymResolutionPtrs *symres, const char *symname,
   uint32_t bit2 = (hash >> shift2) % 64;
 
   if (((bitmask_word >> bit1) & 1) == 0 || ((bitmask_word >> bit2) & 1) == 0) {
-    return NULL;
+    return (void *)-1;
   }
 
   uint32_t sym_index = buckets[hash % nbuckets];
@@ -99,7 +104,7 @@ void *elf_resolve_sym_addr_gnu(SymResolutionPtrs *symres, const char *symname,
 
     sym_index++;
   }
-  return NULL;
+  return (void *)-1;
 }
 
 int elf_calculate_total_vaddr(Elf64_Data *elf, ElfLoadVaddrBounds *bounds) {
@@ -348,12 +353,20 @@ void elf_handle_dyn(Elf64_Data *elf, uintptr_t base, DynPtrs *dyn_ptrs) {
 
       Elf64_Dyn *cursor = dyn;
       for (; cursor->d_tag != DT_NULL; cursor++) {
+        char **temp;
         switch (cursor->d_tag) {
         case DT_RELA:
           dyn_ptrs->rela_data.rela = (Elf64_Rela *)(base + cursor->d_un.d_ptr);
           break;
         case DT_RELASZ:
           dyn_ptrs->rela_data.relasz = cursor->d_un.d_val;
+          break;
+        case DT_JMPREL:
+          dyn_ptrs->rela_data.plt_rela =
+              (Elf64_Rela *)(base + cursor->d_un.d_ptr);
+          break;
+        case DT_PLTRELSZ:
+          dyn_ptrs->rela_data.plt_relasz = cursor->d_un.d_val;
           break;
         case DT_SYMTAB:
           dyn_ptrs->symres.symboltab = (Elf64_Sym *)(base + cursor->d_un.d_ptr);
@@ -379,15 +392,9 @@ void elf_handle_dyn(Elf64_Data *elf, uintptr_t base, DynPtrs *dyn_ptrs) {
           dyn_ptrs->init_data.init_arraysz = cursor->d_un.d_val;
           break;
         case DT_GNU_HASH:
-          dyn_ptrs->symres.gnu_hashtab = (uint32_t *)(base + dyn->d_un.d_ptr);
+          dyn_ptrs->symres.gnu_hashtab =
+              (uint32_t *)(base + cursor->d_un.d_ptr);
           break;
-        }
-      }
-
-      cursor = dyn;
-      for (; dyn->d_tag != DT_NULL; dyn++) {
-        char **temp;
-        switch (cursor->d_tag) {
         case DT_NEEDED:
           temp = realloc(dyn_ptrs->needed_data.needed,
                          (dyn_ptrs->needed_data.neededsz + 1) * sizeof(char *));
@@ -395,29 +402,34 @@ void elf_handle_dyn(Elf64_Data *elf, uintptr_t base, DynPtrs *dyn_ptrs) {
             // TODO: deal with this
           }
           dyn_ptrs->needed_data.needed = temp;
-          char *needed_name = dyn_ptrs->symres.strtab + dyn->d_un.d_val;
           dyn_ptrs->needed_data.needed[dyn_ptrs->needed_data.neededsz] =
-              needed_name;
+              (char *)cursor->d_un.d_val;
           (dyn_ptrs->needed_data.neededsz)++;
           break;
         }
       }
     }
   }
+  for (uint32_t j = 0; j < dyn_ptrs->needed_data.neededsz; j++) {
+    uintptr_t offset = (uintptr_t)dyn_ptrs->needed_data.needed[j];
+    dyn_ptrs->needed_data.needed[j] = dyn_ptrs->symres.strtab + offset;
+  }
 }
 
-uintptr_t elf_resolve_global_symbol(const char *name, LoadedLib *root_list) {
-  LoadedLib *curr = root_list;
+uintptr_t elf_resolve_global_symbol(const char *name, LoadedLib *root_lib) {
+  LoadedLib *curr = root_lib;
   while (curr != NULL) {
-    uintptr_t addr;
-    addr = (uintptr_t)elf_resolve_sym_addr_gnu(&curr->dyn_ptrs.symres, name,
-                                               curr->base);
-    if (addr != (uintptr_t)-1) {
+    uintptr_t addr = (uintptr_t)-1;
+    if (curr->dyn_ptrs.symres.gnu_hashtab != NULL) {
+      addr = (uintptr_t)elf_resolve_sym_addr_gnu(&curr->dyn_ptrs.symres, name,
+                                                 curr->base);
+    }
+    if (addr == (uintptr_t)-1 && curr->dyn_ptrs.symres.sysVhashtab != NULL) {
       addr = (uintptr_t)elf_resolve_sym_addr(&curr->dyn_ptrs.symres, name,
                                              curr->base);
-      if (addr != (uintptr_t)-1) {
-        return addr;
-      }
+    }
+    if (addr != (uintptr_t)-1) {
+      return addr;
     }
     curr = curr->next;
   }
@@ -436,17 +448,72 @@ int16_t elf_handle_reallocations(LoadedLib *lib, LoadedLib *root_lib) {
       uint64_t type = ELF64_R_TYPE(rela[i].r_info);
       uint64_t sym_idx = ELF64_M_SYM(rela[i].r_info);
       uintptr_t *target = (uintptr_t *)(base + rela[i].r_offset);
+      uintptr_t addr;
       char *name;
       switch (type) {
       case R_X86_64_RELATIVE:
         *target = base + rela[i].r_addend;
         break;
+      case R_X86_64_64:
+        name = symres.strtab + symres.symboltab[sym_idx].st_name;
+        addr = (uintptr_t)elf_resolve_global_symbol(name, root_lib);
+        if (addr == (uintptr_t)-1) {
+          Elf64_Sym *sym = &symres.symboltab[sym_idx];
+          if (ELF64_ST_BIND(sym->st_info) == STB_WEAK) {
+            *target = 0;
+            continue;
+          }
+          printf("ERROR: Linker error: failed to resolve referecne to symbol: "
+                 "%s\n",
+                 name);
+          return -1;
+        }
+        *target = addr + rela[i].r_addend;
+        break;
       case R_X86_64_JUMP_SLOT:
       case R_X86_64_GLOB_DAT:
         name = symres.strtab + symres.symboltab[sym_idx].st_name;
+        addr = (uintptr_t)elf_resolve_global_symbol(name, root_lib);
+        if (addr == (uintptr_t)-1) {
+          Elf64_Sym *sym = &symres.symboltab[sym_idx];
+          if (ELF64_ST_BIND(sym->st_info) == STB_WEAK) {
+            *target = 0;
+            continue;
+          }
+          printf("ERROR: Linker error: failed to resolve referecne to symbol: "
+                 "%s\n",
+                 name);
+          return -1;
+        }
+        *target = addr;
+        break;
+      }
+    }
+  }
+
+  Elf64_Rela *plt_rela = lib->dyn_ptrs.rela_data.plt_rela;
+  uint32_t plt_relasz = lib->dyn_ptrs.rela_data.plt_relasz;
+
+  if (plt_rela && plt_relasz) {
+    size_t count = plt_relasz / sizeof(Elf64_Rela);
+    for (size_t i = 0; i < count; i++) {
+      uint64_t type = ELF64_R_TYPE(plt_rela[i].r_info);
+      uint64_t sym_idx = ELF64_M_SYM(plt_rela[i].r_info);
+      uintptr_t *target = (uintptr_t *)(base + plt_rela[i].r_offset);
+      char *name;
+
+      switch (type) {
+      case R_X86_64_JUMP_SLOT:
+        name = lib->dyn_ptrs.symres.strtab +
+               lib->dyn_ptrs.symres.symboltab[sym_idx].st_name;
         uintptr_t addr = (uintptr_t)elf_resolve_global_symbol(name, root_lib);
         if (addr == (uintptr_t)-1) {
-          printf("ERROR: Linker error: undefined referecne to symbol: %s\n",
+          Elf64_Sym *sym = &symres.symboltab[sym_idx];
+          if (ELF64_ST_BIND(sym->st_info) == STB_WEAK) {
+            *target = 0;
+            continue;
+          }
+          printf("ERROR: Linker error: failed to resolve elf symbol: %s\n",
                  name);
           return -1;
         }
@@ -493,11 +560,62 @@ void elf_run_init_routines(LoadedLib *lib) {
   }
 }
 
-int16_t elf_handle_init_execution_order(LoadedLib *lib) {
-  if (lib->next != NULL) {
-    elf_handle_init_execution_order(lib->next);
+static LoadedLib *find_lib_by_soname(LoadedLib *root_lib, const char *soname) {
+  LoadedLib *curr = root_lib;
+  while (curr != NULL) {
+    if (curr->soname && strcmp(curr->soname, soname) == 0) {
+      return curr;
+    }
+    curr = curr->next;
   }
+  return NULL;
+}
+
+static void elf_initialize_lib_graph(LoadedLib *lib, LoadedLib *root_lib) {
+  if (lib == NULL)
+    return;
+
+  InitState state = lib->dyn_ptrs.init_data.init_state;
+  if (state == INIT_STATE_COMPLETE) {
+    return;
+  }
+
+  if (state == INIT_STATE_VISITING) {
+    // On circular dependency the order of initialization is undefined
+    // Which means it could be in any order, this loader breaks the loop cleanly
+    // and executes the init only once.
+    return;
+  }
+
+  lib->dyn_ptrs.init_data.init_state = INIT_STATE_VISITING;
+
+  for (uint32_t i = 0; i < lib->dyn_ptrs.needed_data.neededsz; i++) {
+    const char *dep_name = lib->dyn_ptrs.needed_data.needed[i];
+    LoadedLib *dep_lib = find_lib_by_soname(root_lib, dep_name);
+
+    if (dep_lib != NULL) {
+      elf_initialize_lib_graph(dep_lib, root_lib);
+    } else {
+      printf("ERROR: Dependency '%s' was not found in lib graph.\n", dep_name);
+    }
+  }
+
   elf_run_init_routines(lib);
+
+  lib->dyn_ptrs.init_data.init_state = INIT_STATE_COMPLETE;
+}
+
+int16_t elf_handle_init_execution_order(LoadedLib *root_lib) {
+  if (root_lib == NULL)
+    return -1;
+
+  LoadedLib *curr = root_lib;
+  while (curr != NULL) {
+    curr->dyn_ptrs.init_data.init_state = INIT_STATE_UNVISITED;
+    curr = curr->next;
+  }
+  elf_initialize_lib_graph(root_lib, root_lib);
+
   return 0;
 }
 
@@ -549,6 +667,11 @@ int16_t elf_load_lib(LoadedLib *elf_lib, LoadedLib *root_lib) {
       current = current->next;
     }
   }
+  int ret = fclose(fp);
+  if (ret != 0) {
+    // TODO: handle error.
+  }
+
   return 0;
 }
 
@@ -639,7 +762,7 @@ void setup_and_jump(uintptr_t entry_point, uintptr_t base, Elf64_Data *elf,
   *(--stack_ptr) = AT_ENTRY;
 
   // envp (NULL terminated)
-  *(--stack_ptr) = 0;
+  *(--stack_ptr) = 0; // TODO: add env support
 
   // argv (NULL terminated)
   *(--stack_ptr) = 0;

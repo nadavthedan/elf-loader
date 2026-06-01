@@ -23,6 +23,8 @@ typedef struct {
 typedef struct {
   Elf64_Rela *rela;
   uint32_t relasz;
+  Elf64_Rela *plt_rela;
+  uint32_t plt_relasz;
 } RelaData;
 
 typedef struct {
@@ -31,10 +33,17 @@ typedef struct {
   char *runpath;
 } NeededData;
 
+typedef enum {
+  INIT_STATE_UNVISITED = 0,
+  INIT_STATE_VISITING,
+  INIT_STATE_COMPLETE
+} InitState;
+
 typedef struct {
   uintptr_t init_func;
   uintptr_t *init_array;
   size_t init_arraysz;
+  InitState init_state;
 } InitData;
 
 typedef struct {
