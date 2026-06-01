@@ -28,16 +28,20 @@ int main(int argc, char *argv[]) {
 
   char *program_name = elf_argv[0];
   lib->soname = program_name;
-  ret = elf_load_lib(lib);
+  ret = elf_load_lib(lib, lib);
   if (ret != 0) {
     printf("ERROR: Failed Loading .so Library.\n");
     return -1;
   }
 
-  ret = elf_handle_reallocations(lib);
-  if (ret != 0) {
-    printf("ERROR: Failed Relocations for .so Library.\n");
-    return -1;
+  LoadedLib *curr = lib;
+  while (curr != NULL) {
+    ret = elf_handle_reallocations(curr, lib);
+    if (ret != 0) {
+      printf("ERROR: Failed Relocations for .so Library.\n");
+      return -1;
+    }
+    curr = curr->next;
   }
   ret = elf_handle_init_execution_order(lib);
   if (ret != 0) {

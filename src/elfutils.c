@@ -86,3 +86,11 @@ uint32_t elf_hash(const unsigned char *name) {
   }
   return h;
 }
+
+uint32_t elf_gnu_hash(const unsigned char *name) {
+  uint32_t h = 5381;
+  while (*name) {
+    h = (h << 5) + h + *name++;
+  }
+  return h;
+}

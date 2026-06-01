@@ -15,6 +15,7 @@ typedef struct {
 
 typedef struct {
   uint32_t *sysVhashtab;
+  uint32_t *gnu_hashtab;
   Elf64_Sym *symboltab;
   char *strtab;
 } SymResolutionPtrs;
@@ -56,9 +57,9 @@ typedef struct LoadedLib {
 // returns 0 on success, 1 on error.
 uintptr_t elf_load_to_memory(FILE *fp, Elf64_Data *elf);
 
-int16_t elf_handle_reallocations(LoadedLib *lib);
+int16_t elf_handle_reallocations(LoadedLib *lib, LoadedLib *root_lib);
 int16_t elf_handle_init_execution_order(LoadedLib *lib);
-int16_t elf_load_lib(LoadedLib *elf_lib);
+int16_t elf_load_lib(LoadedLib *elf_lib, LoadedLib *root_lib);
 
 // allocates stack, sets up initial register state jumps to entry point.
 void setup_and_jump(uintptr_t entry_point, uintptr_t base, Elf64_Data *elf,
