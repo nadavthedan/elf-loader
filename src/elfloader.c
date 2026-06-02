@@ -1,5 +1,6 @@
 #include "elfloader.h"
 #include "elfutils.h"
+#include <dlfcn.h>
 #include <elf.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -220,7 +221,7 @@ int elf_ph_handle_dyn(Elf64_Phdr *phdr, uintptr_t base,
       size_t count = relasz / sizeof(Elf64_Rela);
       for (size_t i = 0; i < count; i++) {
         uint64_t type = ELF64_R_TYPE(rela[i].r_info);
-        uint64_t sym_idx = ELF64_M_SYM(rela[i].r_info);
+        uint64_t sym_idx = ELF64_R_SYM(rela[i].r_info);
         uintptr_t *target = (uintptr_t *)(base + rela[i].r_offset);
         char *name;
         switch (type) {
@@ -368,6 +369,13 @@ void elf_handle_dyn(Elf64_Data *elf, uintptr_t base, DynPtrs *dyn_ptrs) {
         case DT_PLTRELSZ:
           dyn_ptrs->rela_data.plt_relasz = cursor->d_un.d_val;
           break;
+        case DT_RELR:
+          dyn_ptrs->rela_data.relr =
+              (Elf64_Relr *)(base + cursor->d_un.d_ptr);
+          break;
+        case DT_RELRSZ:
+          dyn_ptrs->rela_data.relrsz = cursor->d_un.d_val;
+          break;
         case DT_SYMTAB:
           dyn_ptrs->symres.symboltab = (Elf64_Sym *)(base + cursor->d_un.d_ptr);
           break;
@@ -433,6 +441,11 @@ uintptr_t elf_resolve_global_symbol(const char *name, LoadedLib *root_lib) {
     }
     curr = curr->next;
   }
+
+  void *sym = dlsym(RTLD_DEFAULT, name);
+  if (sym) {
+    return (uintptr_t)sym;
+  }
   return (uintptr_t)-1;
 }
 
@@ -446,7 +459,7 @@ int16_t elf_handle_reallocations(LoadedLib *lib, LoadedLib *root_lib) {
     size_t count = relasz / sizeof(Elf64_Rela);
     for (size_t i = 0; i < count; i++) {
       uint64_t type = ELF64_R_TYPE(rela[i].r_info);
-      uint64_t sym_idx = ELF64_M_SYM(rela[i].r_info);
+      uint64_t sym_idx = ELF64_R_SYM(rela[i].r_info);
       uintptr_t *target = (uintptr_t *)(base + rela[i].r_offset);
       uintptr_t addr;
       char *name;
@@ -502,7 +515,7 @@ int16_t elf_handle_reallocations(LoadedLib *lib, LoadedLib *root_lib) {
     size_t count = plt_relasz / sizeof(Elf64_Rela);
     for (size_t i = 0; i < count; i++) {
       uint64_t type = ELF64_R_TYPE(plt_rela[i].r_info);
-      uint64_t sym_idx = ELF64_M_SYM(plt_rela[i].r_info);
+      uint64_t sym_idx = ELF64_R_SYM(plt_rela[i].r_info);
       uintptr_t *target = (uintptr_t *)(base + plt_rela[i].r_offset);
       char *name;
 
@@ -523,6 +536,32 @@ int16_t elf_handle_reallocations(LoadedLib *lib, LoadedLib *root_lib) {
         }
         *target = addr;
         break;
+      }
+    }
+  }
+  Elf64_Relr *relr = lib->dyn_ptrs.rela_data.relr;
+  uint32_t relrsz = lib->dyn_ptrs.rela_data.relrsz;
+
+  if (relr && relrsz) {
+    size_t count = relrsz / sizeof(Elf64_Relr);
+    uintptr_t group_offset = 0;
+    for (size_t i = 0; i < count; i++) {
+      Elf64_Relr entry = relr[i];
+      if ((entry & 1) == 0) {
+        uintptr_t offset = entry;
+        *(uintptr_t *)(base + offset) += base;
+        group_offset = offset + sizeof(uintptr_t);
+      } else {
+        uintptr_t offset = group_offset;
+        entry >>= 1;
+        do {
+          if (entry & 1) {
+            *(uintptr_t *)(base + offset) += base;
+          }
+          offset += sizeof(uintptr_t);
+          entry >>= 1;
+        } while (entry != 0);
+        group_offset = offset;
       }
     }
   }
@@ -599,8 +638,6 @@ static void elf_initialize_lib_graph(LoadedLib *lib, LoadedLib *root_lib) {
 
     if (dep_lib != NULL) {
       elf_initialize_lib_graph(dep_lib, root_lib);
-    } else {
-      printf("ERROR: Dependency '%s' was not found in lib graph.\n", dep_name);
     }
   }
 
@@ -638,7 +675,6 @@ int16_t elf_load_lib(LoadedLib *elf_lib, LoadedLib *root_lib) {
   if (elf_lib == NULL) {
     return 0;
   }
-  uint32_t i;
   if (strchr(elf_lib->soname, '/') != NULL) {
     elf_lib->path = strdup(elf_lib->soname);
   } else {
@@ -657,9 +693,17 @@ int16_t elf_load_lib(LoadedLib *elf_lib, LoadedLib *root_lib) {
   elf_lib->base = (uintptr_t)res - lib_bounds.min_vaddr;
   elf_handle_load(&elf_lib->headers, elf_lib->base, fileno(fp));
   elf_handle_dyn(&elf_lib->headers, elf_lib->base, &elf_lib->dyn_ptrs);
+
   LoadedLib *current = elf_lib;
-  for (i = 0; i < elf_lib->dyn_ptrs.needed_data.neededsz; i++) {
+  for (uint32_t i = 0; i < elf_lib->dyn_ptrs.needed_data.neededsz; i++) {
     char *needed_name = elf_lib->dyn_ptrs.needed_data.needed[i];
+
+    void *host_handle = dlopen(needed_name, RTLD_NOLOAD | RTLD_LAZY);
+    if (host_handle) {
+      dlclose(host_handle);
+      continue;
+    }
+
     if (elf_lib_already_loaded(needed_name, root_lib))
       continue;
 
@@ -667,25 +711,25 @@ int16_t elf_load_lib(LoadedLib *elf_lib, LoadedLib *root_lib) {
     current->next = next_lib;
     next_lib->soname = elf_lib->dyn_ptrs.needed_data.needed[i];
     elf_load_lib(next_lib, root_lib);
-    while (current->next != NULL) {
+    while (current->next != NULL)
       current = current->next;
-    }
   }
-  int ret = fclose(fp);
-  if (ret != 0) {
-    // TODO: handle error.
-  }
+
+  fclose(fp);
 
   return 0;
 }
 
-void execute_entry(uintptr_t entry, void *stack_ptr) {
+__attribute__((naked)) void execute_entry(uintptr_t entry, void *stack_ptr) {
+  // Accourding to the AMD64 ABI calling convention:
+  // first argument entry, arrives in the %rdi register
+  // second argument stack_ptr, arrives in the %rsi register
   __asm__ volatile(
-      "mov %0, %%rsp\n\t"    // Set the stack pointer to our new stack
-      "xor %%rdx, %%rdx\n\t" // Per ABI: rdx should be 0 to indicate no atexit
-      "jmp *%1\n\t"          // Jump to the ELF entry point
+      "mov %%rsi, %%rsp\n\t" // Cut over to the custom stack pointer
+      "xor %%rdx, %%rdx\n\t" // Clear %rdx per ABI
+      "jmp *%%rdi\n\t"       // Jump to the ELF entry point
       :
-      : "r"(stack_ptr), "c"(entry)
+      :
       : "memory");
 }
 

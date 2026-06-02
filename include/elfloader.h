@@ -20,11 +20,15 @@ typedef struct {
   char *strtab;
 } SymResolutionPtrs;
 
+typedef uint64_t Elf64_Relr;
+
 typedef struct {
   Elf64_Rela *rela;
   uint32_t relasz;
   Elf64_Rela *plt_rela;
   uint32_t plt_relasz;
+  Elf64_Relr *relr;
+  uint32_t relrsz;
 } RelaData;
 
 typedef struct {
@@ -69,6 +73,7 @@ uintptr_t elf_load_to_memory(FILE *fp, Elf64_Data *elf);
 int16_t elf_handle_reallocations(LoadedLib *lib, LoadedLib *root_lib);
 int16_t elf_handle_init_execution_order(LoadedLib *lib);
 int16_t elf_load_lib(LoadedLib *elf_lib, LoadedLib *root_lib);
+uintptr_t elf_resolve_global_symbol(const char *name, LoadedLib *root_lib);
 
 // allocates stack, sets up initial register state jumps to entry point.
 void setup_and_jump(uintptr_t entry_point, uintptr_t base, Elf64_Data *elf,
