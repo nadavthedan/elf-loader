@@ -153,126 +153,6 @@ void *elf_reserve_memory(Elf64_Data *elf, ElfLoadVaddrBounds *bounds) {
   return mapping;
 }
 
-int elf_ph_handle_load(Elf64_Phdr *phdr, uintptr_t base, uint64_t fd) {
-  int page_size = getpagesize();
-  uint32_t prots = PROT_NONE;
-
-  uintptr_t seg_start = ALIGN_DOWN(phdr->p_vaddr, page_size);
-  uintptr_t page_offset = phdr->p_vaddr - seg_start;
-  size_t map_size = ALIGN_UP(page_offset + phdr->p_memsz, page_size);
-  off_t file_off = ALIGN_DOWN(phdr->p_offset, page_size);
-
-  if (phdr->p_flags & PF_X)
-    prots |= PROT_EXEC;
-  if (phdr->p_flags & PF_W)
-    prots |= PROT_WRITE;
-  if (phdr->p_flags & PF_R)
-    prots |= PROT_READ;
-
-  void *mem = mmap((void *)(base + seg_start), map_size, prots,
-                   MAP_FIXED | MAP_PRIVATE, fd, file_off);
-  if (mem == MAP_FAILED) {
-    printf("ERROR: Failed mmap.\n");
-    return -1;
-  }
-
-  uintptr_t data_offset = phdr->p_vaddr - seg_start;
-  if (phdr->p_filesz < phdr->p_memsz) {
-    memset(mem + phdr->p_filesz + data_offset, 0,
-           phdr->p_memsz - phdr->p_filesz);
-  }
-  return 0;
-}
-
-int elf_ph_handle_dyn(Elf64_Phdr *phdr, uintptr_t base,
-                      SymResolutionPtrs *symres) {
-  if (phdr->p_type == PT_DYNAMIC) {
-    Elf64_Dyn *dyn = (Elf64_Dyn *)(base + phdr->p_vaddr);
-    Elf64_Rela *rela = NULL;
-    size_t relasz = 0;
-    char **needed = NULL;
-    uint64_t *needed_count = 0;
-    char *runpath = NULL;
-
-    for (; dyn->d_tag != DT_NULL; dyn++) {
-      if (dyn->d_tag == DT_RELA)
-        rela = (Elf64_Rela *)(base + dyn->d_un.d_ptr);
-      if (dyn->d_tag == DT_RELASZ)
-        relasz = dyn->d_un.d_val;
-      if (dyn->d_tag == DT_SYMTAB)
-        symres->symboltab = (Elf64_Sym *)(base + dyn->d_un.d_ptr);
-      if (dyn->d_tag == DT_STRTAB)
-        symres->strtab = (char *)(base + dyn->d_un.d_ptr);
-      if (dyn->d_tag == DT_HASH)
-        symres->sysVhashtab = (uint32_t *)(base + dyn->d_un.d_ptr);
-      if (dyn->d_tag == DT_NEEDED) {
-        char **temp = realloc(needed, (*needed_count + 1) * sizeof(char *));
-        if (!temp) {
-          // TODO: deal with this
-        }
-        needed = temp;
-        needed[*needed_count] = (char *)dyn->d_un.d_ptr;
-        (*needed_count)++;
-      }
-      if (dyn->d_tag == DT_RUNPATH)
-        runpath = (char *)dyn->d_un.d_ptr;
-    }
-    if (rela && relasz) {
-      size_t count = relasz / sizeof(Elf64_Rela);
-      for (size_t i = 0; i < count; i++) {
-        uint64_t type = ELF64_R_TYPE(rela[i].r_info);
-        uint64_t sym_idx = ELF64_R_SYM(rela[i].r_info);
-        uintptr_t *target = (uintptr_t *)(base + rela[i].r_offset);
-        char *name;
-        switch (type) {
-        case R_X86_64_RELATIVE:
-          *target = base + rela[i].r_addend;
-          break;
-        case R_X86_64_JUMP_SLOT:
-        case R_X86_64_GLOB_DAT:
-          name = symres->strtab + symres->symboltab[sym_idx].st_name;
-          uintptr_t addr = (uintptr_t)elf_resolve_sym_addr(symres, name, base);
-          *target = addr;
-          break;
-        }
-      }
-    }
-  } else {
-    return -1;
-  }
-  return 0;
-}
-
-uintptr_t elf_load_to_memory(FILE *fp, Elf64_Data *elf) {
-  uint64_t i;
-  int64_t ret;
-  ElfLoadVaddrBounds bounds;
-  SymResolutionPtrs symres;
-  void *res = elf_reserve_memory(elf, &bounds);
-  uintptr_t base = (uintptr_t)res - bounds.min_vaddr;
-  for (i = 0; i < elf->elf_header.e_phnum; i++) {
-    Elf64_Phdr phdr = elf->program_headers[i];
-    switch (phdr.p_type) {
-    case PT_LOAD:
-      ret = elf_ph_handle_load(&phdr, base, fileno(fp));
-      break;
-    case PT_DYNAMIC:
-      ret = elf_ph_handle_dyn(&phdr, base, &symres);
-      break;
-    case PT_INTERP:
-      // ret = elf_ph_interp_handle(&phdr, base);
-      break;
-    }
-    if (ret == -1) {
-      printf("ERROR: Failed to load elf to memory. faild on program header of "
-             "type %d",
-             phdr.p_type);
-      return -1;
-    }
-  }
-  return base;
-}
-
 void elf_handle_load(Elf64_Data *elf, uintptr_t base, int fd) {
   int page_size = getpagesize();
   uint64_t i;
@@ -370,8 +250,7 @@ void elf_handle_dyn(Elf64_Data *elf, uintptr_t base, DynPtrs *dyn_ptrs) {
           dyn_ptrs->rela_data.plt_relasz = cursor->d_un.d_val;
           break;
         case DT_RELR:
-          dyn_ptrs->rela_data.relr =
-              (Elf64_Relr *)(base + cursor->d_un.d_ptr);
+          dyn_ptrs->rela_data.relr = (Elf64_Relr *)(base + cursor->d_un.d_ptr);
           break;
         case DT_RELRSZ:
           dyn_ptrs->rela_data.relrsz = cursor->d_un.d_val;

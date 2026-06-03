@@ -19,9 +19,6 @@ typedef struct {
   uint32_t *gnu_hashtab;
   Elf64_Sym *symboltab;
   char *strtab;
-  Elf64_Sym *static_symboltab;
-  char *static_strtab;
-  size_t *static_symtabsz;
 } SymResolutionPtrs;
 
 typedef uint64_t Elf64_Relr;
@@ -69,10 +66,6 @@ typedef struct LoadedLib {
   DynPtrs dyn_ptrs;
   struct LoadedLib *next;
 } LoadedLib;
-
-// reserve virtual memory for the elf program LOAD data to memory.
-// returns 0 on success, 1 on error.
-uintptr_t elf_load_to_memory(FILE *fp, Elf64_Data *elf);
 
 int16_t elf_handle_reallocations(LoadedLib *lib, LoadedLib *root_lib);
 int16_t elf_handle_init_execution_order(LoadedLib *lib);
