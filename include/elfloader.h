@@ -3,6 +3,7 @@
 
 #include "elfutils.h"
 #include <elf.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #define ALIGN_DOWN(x, pagesize) ((x) & ~((pagesize) - 1))
@@ -18,6 +19,9 @@ typedef struct {
   uint32_t *gnu_hashtab;
   Elf64_Sym *symboltab;
   char *strtab;
+  Elf64_Sym *static_symboltab;
+  char *static_strtab;
+  size_t *static_symtabsz;
 } SymResolutionPtrs;
 
 typedef uint64_t Elf64_Relr;
