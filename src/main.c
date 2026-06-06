@@ -1,5 +1,6 @@
+#include "elfexec.h"
+#include "elflinker.h"
 #include "elfloader.h"
-#include "elfutils.h"
 #include <elf.h>
 #include <stdint.h>
 #include <stdio.h>

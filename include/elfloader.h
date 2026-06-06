@@ -68,11 +68,4 @@ typedef struct LoadedLib {
 } LoadedLib;
 
 int16_t elf_load_lib(LoadedLib *elf_lib, LoadedLib *root_lib);
-int16_t elf_handle_reallocations(LoadedLib *lib, LoadedLib *root_lib);
-int16_t elf_handle_init_execution_order(LoadedLib *lib);
-uintptr_t elf_resolve_global_symbol(const char *name, LoadedLib *root_lib);
-
-// allocates stack, sets up initial register state jumps to entry point.
-void setup_and_jump(uintptr_t entry_point, uintptr_t base, Elf64_Data *elf,
-                    int argc, char *argv[]);
 #endif
