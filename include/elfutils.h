@@ -19,10 +19,7 @@ typedef struct {
 // It returns 0 on success and -1 on error.
 int elf_headers_read(FILE *fp, Elf64_Data *elf);
 
-int populate_str_table(Elf64_Data *elf, char **str_table, uint shidx, FILE *fp);
-
-int read_section(void **section, size_t size, Elf64_Shdr shdr, FILE *fp);
-
+// Elf hash functions used for resolving sumbols
 uint32_t elf_hash(const unsigned char *name);
 uint32_t elf_gnu_hash(const unsigned char *name);
 #endif

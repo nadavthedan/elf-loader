@@ -55,6 +55,7 @@ int main(int argc, char *argv[]) {
     free(lib);
     return -1;
   }
+  char is_static = lib->headers.elf_header.e_type == ET_EXEC;
   char is_pie = 0;
   for (int i = 0; i < lib->headers.elf_header.e_phnum; i++) {
     if (lib->headers.program_headers[i].p_type == PT_INTERP) {
@@ -71,7 +72,7 @@ int main(int argc, char *argv[]) {
     }
     curr = curr->next;
   }
-  if (is_pie) {
+  if (is_static || is_pie) {
     uintptr_t entry_point = lib->base + lib->headers.elf_header.e_entry;
     setup_and_jump(entry_point, lib->base, &lib->headers, argc, argv);
   } else {
